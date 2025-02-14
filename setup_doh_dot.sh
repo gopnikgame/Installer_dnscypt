@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.10"
+VERSION="2.0.11"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -195,7 +195,7 @@ install_dependencies() {
   
   # Get the installed version
   local installed_version_output=$("$DNSCRYPT_BIN_PATH" --version 2>&1)
-  local installed_version=$(echo "$installed_version_output" | awk '{print $2}' | cut -d'-' -f1)
+  local installed_version=$(echo "$installed_version_output" | grep -oE '^([0-9]+\.[0-9]+\.[0-9]+)')
   
   if [[ -z "$installed_version" ]]; then
     log "ERROR" "Failed to determine the installed version of dnscrypt-proxy. Output: $installed_version_output"
