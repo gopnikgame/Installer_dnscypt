@@ -5,8 +5,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script version and metadata
-VERSION="1.2.6"
-SCRIPT_START_TIME="2025-02-14 08:59:33"
+VERSION="1.2.7"
+SCRIPT_START_TIME="2025-02-14 09:05:15"
 CURRENT_USER="gopnikgame"
 
 # Colors for output
