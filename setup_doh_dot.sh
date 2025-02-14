@@ -6,7 +6,7 @@ IFS=$'\n\t'
 
 # Script metadata
 VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 18:05:31"
+SCRIPT_START_TIME="2025-02-14 18:17:18"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -53,7 +53,18 @@ DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
 DNSCRYPT_BIN_PATH="/usr/local/bin/dnscrypt-proxy"
 DNSCRYPT_CACHE_DIR="/var/cache/dnscrypt-proxy"
 STATE_FILE="/tmp/dnscrypt_install_state_$(date +%Y%m%d_%H%M%S)"
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        log "ERROR" "Script failed with exit code $exit_code"
+        rollback_system
+    fi
+    exit $exit_code
+}
 
+# Set cleanup handler
+trap cleanup EXIT
 # Enhanced logging function
 log() {
     local level=$1
@@ -370,7 +381,59 @@ EOL
     
     log "INFO" "DNSCrypt-proxy installation completed"
 }
-# Main installation process
+# Rollback system changes
+rollback_system() {
+    log "INFO" "=== Starting System Rollback ==="
+    local state=$(load_state)
+    
+    case "$state" in
+        "installation")
+            log "INFO" "Rolling back DNSCrypt-proxy installation..."
+            systemctl stop dnscrypt-proxy 2>/dev/null || true
+            systemctl disable dnscrypt-proxy 2>/dev/null || true
+            rm -f /etc/systemd/system/dnscrypt-proxy.service
+            systemctl daemon-reload
+            
+            # Remove DNSCrypt files
+            rm -f "$DNSCRYPT_BIN_PATH"
+            rm -rf "/etc/dnscrypt-proxy"
+            rm -rf "$DNSCRYPT_CACHE_DIR"
+            
+            # Restore resolv.conf
+            chattr -i /etc/resolv.conf 2>/dev/null || true
+            if [[ -f "$BACKUP_DIR/resolv.conf" ]]; then
+                cp "$BACKUP_DIR/resolv.conf" /etc/resolv.conf
+            else
+                echo "nameserver 8.8.8.8" > /etc/resolv.conf
+            fi
+            
+            # Restart system resolver
+            systemctl enable systemd-resolved 2>/dev/null || true
+            systemctl start systemd-resolved 2>/dev/null || true
+            ;&
+        "backup")
+            log "INFO" "Restoring system configuration..."
+            if [[ -d "$BACKUP_DIR" ]]; then
+                for file in "$BACKUP_DIR"/*; do
+                    [[ -f "$file" ]] && cp -f "$file" "${file##*/}"
+                done
+            fi
+            ;&
+        "port_check")
+            log "INFO" "Restoring DNS services..."
+            for service in systemd-resolved named bind9 dnsmasq unbound; do
+                if systemctl is-enabled "$service" &>/dev/null; then
+                    systemctl start "$service" 2>/dev/null || true
+                fi
+            done
+            ;;
+        *)
+            log "WARN" "No state found, performing full rollback..."
+            ;;
+    esac
+    
+    log "INFO" "System rollback completed"
+}
 # Main installation process
 main() {
     log "INFO" "Starting DNSCrypt-proxy installation (Version: $VERSION)"
