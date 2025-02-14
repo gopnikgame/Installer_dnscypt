@@ -5,8 +5,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script version and metadata
-VERSION="1.2.4"
-SCRIPT_START_TIME="2025-02-14 08:20:30"
+VERSION="1.2.5"
+SCRIPT_START_TIME="2025-02-14 08:33:10"
 CURRENT_USER="gopnikgame"
 
 # Colors for output
@@ -91,12 +91,9 @@ create_backups() {
         fi
     done
 
-    # Backup current UFW rules
+    # Backup current UFW rules and DNS settings
     ufw status numbered > "${BACKUP_DIR}/ufw_rules.backup"
-    
-    # Save system DNS settings
-    echo "Original DNS Settings ($(date))" > "${BACKUP_DIR}/dns_settings.original"
-    resolvectl status >> "${BACKUP_DIR}/dns_settings.original"
+    resolvectl status > "${BACKUP_DIR}/dns_settings.original"
 }
 
 # Enhanced UFW management function with SSH protection
@@ -159,6 +156,9 @@ reset_dns_resolver() {
         cp /etc/resolv.conf "${BACKUP_DIR}/resolv.conf.original"
     fi
     
+    # Remove immutable attribute if set
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    
     # Reset resolved configuration
     cat > /etc/systemd/resolved.conf << 'EOL'
 [Resolve]
@@ -185,13 +185,13 @@ install_packages() {
         DEBIAN_FRONTEND=noninteractive apt-get install -y "$package"
     done
 }
-
 # Function to configure DNSCrypt
 configure_dnscrypt() {
     log_message "INFO" "=== Configuring DNSCrypt-Proxy ==="
     
     # Stop services before configuration
-    systemctl stop dnscrypt-proxy 2>/dev/null || true
+    systemctl stop systemd-resolved || true
+    systemctl stop dnscrypt-proxy || true
 
     # Get correct user and group for dnscrypt-proxy
     local DNSCRYPT_USER=$(getent passwd | grep dnscrypt-proxy | cut -d: -f1)
@@ -209,8 +209,25 @@ configure_dnscrypt() {
             useradd -r -g "$DNSCRYPT_GROUP" -s /bin/false -d /var/cache/dnscrypt-proxy "$DNSCRYPT_USER"
         fi
     fi
-    
-    # Create main configuration
+
+    # Configure systemd-resolved first
+    cat > /etc/systemd/resolved.conf << 'EOL'
+[Resolve]
+DNS=127.0.0.53
+FallbackDNS=1.1.1.1 8.8.8.8
+DNSStubListener=no
+Cache=yes
+DNSOverTLS=no
+DNSSEC=false
+EOL
+
+    # Ensure resolved uses the new configuration
+    systemctl daemon-reload
+    systemctl restart systemd-resolved
+    sleep 2
+
+    # Create main configuration for DNSCrypt
+    mkdir -p /etc/dnscrypt-proxy
     cat > /etc/dnscrypt-proxy/dnscrypt-proxy.toml << 'EOL'
 listen_addresses = ['127.0.0.53:53']
 server_names = ['cloudflare', 'google']
@@ -255,42 +272,55 @@ EOL
     # Create required directories
     mkdir -p /var/log/dnscrypt-proxy
     mkdir -p /var/cache/dnscrypt-proxy
-
+    
     # Set correct ownership and permissions
     chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" /var/log/dnscrypt-proxy
     chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" /var/cache/dnscrypt-proxy
     chmod 755 /var/log/dnscrypt-proxy
     chmod 755 /var/cache/dnscrypt-proxy
 
-    # Configure systemd-resolved with safe defaults
-    cat > /etc/systemd/resolved.conf << 'EOL'
-[Resolve]
-DNS=127.0.0.53
-FallbackDNS=1.1.1.1 8.8.8.8
-DNSStubListener=yes
-Cache=yes
-DNSOverTLS=no
-DNSSEC=false
+    # Create correct resolv.conf
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    cat > /etc/resolv.conf << 'EOL'
+nameserver 127.0.0.53
+options edns0
 EOL
+
+    # Lock resolv.conf to prevent changes
+    chattr +i /etc/resolv.conf
 
     # Ensure correct permissions for configuration files
     chown -R root:root /etc/dnscrypt-proxy
     chmod 644 /etc/dnscrypt-proxy/dnscrypt-proxy.toml
-    
+
     # Enable services
     systemctl enable dnscrypt-proxy
     systemctl enable systemd-resolved
+
+    # Final restart of services in correct order
+    systemctl daemon-reload
+    systemctl restart systemd-resolved
+    sleep 2
+    systemctl restart dnscrypt-proxy
+    sleep 2
+
+    # Verify service status
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        log_message "ERROR" "DNSCrypt-proxy failed to start"
+        systemctl status dnscrypt-proxy
+        return 1
+    fi
 }
 
 # Function to verify installation with timeout
 verify_installation() {
     log_message "INFO" "=== Verifying Installation ==="
     local verification_failed=0
-    local timeout=30
+    local timeout=45
     local start_time=$(date +%s)
     
     # Wait for services to be fully started
-    sleep 5
+    sleep 10
     
     # Check service status
     if ! systemctl is-active --quiet dnscrypt-proxy; then
@@ -300,8 +330,8 @@ verify_installation() {
     fi
     
     # Check port 53 binding
-    if ! ss -tulpn | grep -q ":53"; then
-        log_message "ERROR" "Port 53 is not properly bound"
+    if ! ss -tulpn | grep -q "127.0.0.53:53"; then
+        log_message "ERROR" "Port 53 is not properly bound to 127.0.0.53"
         ss -tulpn | grep ":53" || true
         verification_failed=1
     fi
@@ -311,6 +341,7 @@ verify_installation() {
     while [ $(($(date +%s) - start_time)) -lt $timeout ]; do
         if dig +short +timeout=2 google.com @127.0.0.53 >/dev/null; then
             dns_test_passed=1
+            log_message "INFO" "DNS resolution test successful"
             break
         fi
         log_message "INFO" "Waiting for DNS resolution to become available..."
@@ -322,6 +353,18 @@ verify_installation() {
         verification_failed=1
     fi
     
+    # Additional DNS tests
+    if [ $verification_failed -eq 0 ]; then
+        log_message "INFO" "Testing additional DNS queries..."
+        for domain in cloudflare.com microsoft.com amazon.com; do
+            if ! dig +short +timeout=2 "$domain" @127.0.0.53 >/dev/null; then
+                log_message "ERROR" "Failed to resolve $domain"
+                verification_failed=1
+                break
+            fi
+        done
+    fi
+
     # Verify SSH access is still working
     local ssh_port=$(check_ssh)
     if ! ss -tulpn | grep -q ":${ssh_port}"; then
@@ -335,6 +378,9 @@ verify_installation() {
 # Rollback function in case of failure
 rollback() {
     log_message "ERROR" "Installation failed, initiating rollback..."
+    
+    # Remove immutable attribute from resolv.conf
+    chattr -i /etc/resolv.conf 2>/dev/null || true
     
     # Restore original resolv.conf
     if [ -f "${BACKUP_DIR}/resolv.conf.original" ]; then
@@ -395,21 +441,11 @@ main() {
     # Configure UFW (with SSH protection)
     manage_ufw
     
-    # Restart services in correct order
-    log_message "INFO" "=== Restarting services ==="
-    systemctl daemon-reload
-    systemctl restart systemd-resolved
-    sleep 2
-    systemctl restart dnscrypt-proxy
-    sleep 2
-    
     # Verify installation
     if verify_installation; then
         log_message "INFO" "Verification succeeded"
         show_dns_settings "${BACKUP_DIR}/post_install_settings.txt"
         
-        # Final summary
-        log
         # Final summary
         log_message "INFO" "=== Installation Summary ==="
         echo -e "${GREEN}Installation completed successfully!${NC}"
