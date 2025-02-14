@@ -276,40 +276,74 @@ install_dnscrypt() {
     rm -f dnscrypt.tar.gz # Clean previous downloads
     
     DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
+    ALTERNATIVE_URL="https://download.dnscrypt.info/dnscrypt-proxy/v2.1/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
     
-    log "INFO" "Using download URL: ${DOWNLOAD_URL}"
+    log "INFO" "Using primary download URL: ${DOWNLOAD_URL}"
     
-    # Try download with curl
-    log "INFO" "Attempting download with curl..."
-    if curl -L -v -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
-        log "INFO" "Curl download successful"
-    else
-        log "WARN" "Curl download failed, trying wget..."
-        if ! wget --no-check-certificate -v -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
-            DOWNLOAD_URL="https://download.dnscrypt.info/dnscrypt-proxy/v2.1/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
-            log "INFO" "Trying alternative URL: ${DOWNLOAD_URL}"
-            
-            if ! curl -L -v -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
-                log "ERROR" "All download attempts failed"
+    # Function to verify downloaded file
+    verify_download() {
+        local file="$1"
+        if [ ! -s "$file" ]; then
+            log "ERROR" "Downloaded file is empty"
+            return 1
+        fi
+        
+        if ! file "$file" | grep -q "gzip compressed data"; then
+            log "ERROR" "File is not a valid gzip archive"
+            rm -f "$file"
+            return 1
+        fi
+        
+        return 0
+    }
+
+    # Try primary URL with curl
+    log "INFO" "Attempting download with curl (primary URL)..."
+    if curl -L --connect-timeout 10 --max-time 60 -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+        if verify_download dnscrypt.tar.gz; then
+            log "INFO" "Primary URL download successful"
+        else
+            log "WARN" "Primary URL download corrupted, trying alternative URL..."
+            if curl -L --connect-timeout 10 --max-time 60 -o dnscrypt.tar.gz "$ALTERNATIVE_URL" 2>/dev/null; then
+                if ! verify_download dnscrypt.tar.gz; then
+                    log "ERROR" "Alternative URL download also corrupted"
+                    return 1
+                fi
+            else
+                log "ERROR" "Failed to download from alternative URL"
                 return 1
             fi
         fi
+    else
+        # Try wget as fallback
+        log "WARN" "Curl download failed, trying wget..."
+        if wget --no-check-certificate --timeout=10 --tries=3 -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+            if ! verify_download dnscrypt.tar.gz; then
+                log "WARN" "Primary URL wget download corrupted, trying alternative URL..."
+                if wget --no-check-certificate --timeout=10 --tries=3 -O dnscrypt.tar.gz "$ALTERNATIVE_URL" 2>/dev/null; then
+                    if ! verify_download dnscrypt.tar.gz; then
+                        log "ERROR" "All download attempts failed"
+                        return 1
+                    fi
+                else
+                    log "ERROR" "Failed to download from alternative URL using wget"
+                    return 1
+                fi
+            fi
+        else
+            log "ERROR" "All download attempts failed"
+            return 1
+        fi
     fi
 
-    # Verify download
-    if [ ! -s dnscrypt.tar.gz ]; then
-        log "ERROR" "Downloaded file is empty"
-        return 1
-    fi
-
-    # Check if file is actually a gzip archive
-    if ! file dnscrypt.tar.gz | grep -q "gzip compressed data"; then
-        log "ERROR" "Downloaded file is not a valid gzip archive"
-        return 1
-    fi
-
-    log "INFO" "Download successful, verifying archive..."
+    log "INFO" "Download successful, verifying archive integrity..."
     
+    # Additional verification before extraction
+    if ! tar tf dnscrypt.tar.gz &>/dev/null; then
+        log "ERROR" "Archive verification failed"
+        return 1
+    fi
+
     # Extract with verbose output
     if ! tar xvzf dnscrypt.tar.gz; then
         log "ERROR" "Failed to extract archive"
