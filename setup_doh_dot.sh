@@ -6,7 +6,7 @@ IFS=$'\n\t'
 
 # Script metadata
 VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 19:15:20"
+SCRIPT_START_TIME="2025-02-14 19:20:07"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -54,11 +54,11 @@ DNSCRYPT_BIN_PATH="/usr/local/bin/dnscrypt-proxy"
 DNSCRYPT_CACHE_DIR="/var/cache/dnscrypt-proxy"
 STATE_FILE="/tmp/dnscrypt_install_state_$(date +%Y%m%d_%H%M%S)"
 
-# Enhanced logging function
+# Basic functions
 log() {
-    local level=$1
-    local msg=$2
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local level="$1"
+    local msg="$2"
+    local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
     local line_no="${BASH_LINENO[0]}"
     local func="${FUNCNAME[1]:-main}"
     local log_msg="${timestamp} [${level}] (${func}:${line_no}) ${msg}"
@@ -72,7 +72,6 @@ log() {
     esac | tee -a "$LOG_FILE"
 }
 
-# Command execution with logging
 run_cmd() {
     local cmd="$*"
     local output
@@ -459,6 +458,28 @@ verify_installation() {
     return 0
 }
 
+# Error handler
+error_handler() {
+    local line_no="$1"
+    local command="$2"
+    local exit_code="$3"
+    
+    log "ERROR" "Script failed at line ${line_no}"
+    log "ERROR" "Failed command: ${command}"
+    log "ERROR" "Exit code: ${exit_code}"
+    
+    rollback_system
+}
+
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        log "ERROR" "Script failed with exit code ${exit_code}"
+        rollback_system
+    fi
+}
+
 # Main installation process
 main() {
     log "INFO" "Starting DNSCrypt-proxy installation (Version: $VERSION)"
@@ -484,52 +505,18 @@ main() {
         rollback_system
         exit 1
     fi
+    
     log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
-    log "INFO" "Backup Directory: ${BACKUP_DIR}"
-    log "INFO" "Installation Log: ${LOG_FILE}"
-    
-    # Final configuration verification
-    log "INFO" "Performing final checks..."
-    if systemctl is-active --quiet dnscrypt-proxy && \
-       dig +short +timeout=3 google.com @127.0.0.1 >/dev/null; then
-        log "SUCCESS" "DNSCrypt-proxy is running and resolving DNS queries"
-        log "INFO" "Installation completed successfully"
-        return 0
-    else
-        log "ERROR" "Final verification failed"
-        return 1
-    fi
-}
-
-# Error handler
-error_handler() {
-    local line_no="$1"
-    local command="$2"
-    local exit_code="$3"
-    
-    log "ERROR" "Script failed at line ${line_no}"
-    log "ERROR" "Failed command: ${command}"
-    log "ERROR" "Exit code: ${exit_code}"
-    
-    collect_diagnostics
-    rollback_system
+    log "INFO" "Backup Directory: $BACKUP_DIR"
+    log "INFO" "Installation Log: $LOG_FILE"
+    return 0
 }
 
 # Set error handler
 trap 'error_handler ${LINENO} "${BASH_COMMAND}" $?' ERR
-
-# Cleanup function
-cleanup() {
-    local exit_code=$?
-    if [[ $exit_code -ne 0 ]]; then
-        log "ERROR" "Script failed with exit code ${exit_code}"
-        rollback_system
-    fi
-}
 
 # Set cleanup handler
 trap cleanup EXIT
 
 # Start installation
 main
-    
