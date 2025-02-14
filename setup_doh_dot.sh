@@ -410,3 +410,21 @@ main() {
         
         # Final summary
         log
+        # Final summary
+        log_message "INFO" "=== Installation Summary ==="
+        echo -e "${GREEN}Installation completed successfully!${NC}"
+        echo -e "- Configuration files backed up to: ${BACKUP_DIR}"
+        echo -e "- Log file location: ${LOG_FILE}"
+        echo -e "- DNSCrypt-proxy service is running"
+        echo -e "- DNS resolution is working"
+        echo -e "- SSH access is preserved"
+        echo -e "\nTo monitor the service: ${YELLOW}systemctl status dnscrypt-proxy${NC}"
+        echo -e "To view logs: ${YELLOW}journalctl -u dnscrypt-proxy${NC}"
+    else
+        log_message "ERROR" "Installation verification failed"
+        rollback
+    fi
+}
+
+# Execute main function
+main
