@@ -277,37 +277,94 @@ install_dnscrypt() {
     
     DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
     ALTERNATIVE_URL="https://download.dnscrypt.info/dnscrypt-proxy/v2.1/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
+    BINARY_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64"
     
     log "INFO" "Using primary download URL: ${DOWNLOAD_URL}"
     
-    # Function to verify downloaded file
+    # Enhanced verify_download function
     verify_download() {
         local file="$1"
-        if [ ! -s "$file" ]; then
-            log "ERROR" "Downloaded file is empty"
-            return 1
-        fi
+        log "DEBUG" "Checking file: $file"
         
-        if ! file "$file" | grep -q "gzip compressed data"; then
-            log "ERROR" "File is not a valid gzip archive"
+        # Check if file exists
+        if [ ! -f "$file" ]; then
+            log "ERROR" "File does not exist: $file"
+            return 1
+        }
+        
+        # Check file size
+        local file_size=$(stat -c%s "$file")
+        log "DEBUG" "File size: $file_size bytes"
+        if [ "$file_size" -lt 1000 ]; then
+            log "ERROR" "File is too small: $file_size bytes"
+            return 1
+        }
+        
+        # Check file type using hexdump
+        local file_header=$(hexdump -n 2 -e '2/1 "%02x"' "$file")
+        log "DEBUG" "File header: $file_header"
+        if [ "$file_header" != "1f8b" ]; then
+            log "ERROR" "Invalid gzip header: $file_header (expected: 1f8b)"
             rm -f "$file"
             return 1
-        fi
+        }
+        
+        # Additional file type check
+        local file_type=$(file -b "$file")
+        log "DEBUG" "File type: $file_type"
         
         return 0
     }
 
-    # Try primary URL with curl
-    log "INFO" "Attempting download with curl (primary URL)..."
-    if curl -L --connect-timeout 10 --max-time 60 -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
-        if verify_download dnscrypt.tar.gz; then
-            log "INFO" "Primary URL download successful"
+    # Download function with detailed logging
+    download_file() {
+        local url="$1"
+        local output="$2"
+        local method="$3"
+        
+        log "INFO" "Downloading using $method from: $url"
+        
+        case "$method" in
+            "curl")
+                if curl -L --connect-timeout 10 --max-time 60 \
+                    -H "Accept: application/octet-stream" \
+                    -H "User-Agent: Mozilla/5.0" \
+                    -o "$output" "$url" 2>&1; then
+                    log "DEBUG" "$method download completed"
+                    return 0
+                fi
+                ;;
+            "wget")
+                if wget --no-check-certificate --timeout=10 --tries=3 \
+                    --header="Accept: application/octet-stream" \
+                    --user-agent="Mozilla/5.0" \
+                    -O "$output" "$url" 2>&1; then
+                    log "DEBUG" "$method download completed"
+                    return 0
+                fi
+                ;;
+        esac
+        return 1
+    }
+
+    # Try downloading the archive first
+    log "INFO" "Attempting archive download..."
+    if download_file "$DOWNLOAD_URL" "dnscrypt.tar.gz" "curl"; then
+        if verify_download "dnscrypt.tar.gz"; then
+            log "INFO" "Archive download successful"
         else
-            log "WARN" "Primary URL download corrupted, trying alternative URL..."
-            if curl -L --connect-timeout 10 --max-time 60 -o dnscrypt.tar.gz "$ALTERNATIVE_URL" 2>/dev/null; then
-                if ! verify_download dnscrypt.tar.gz; then
-                    log "ERROR" "Alternative URL download also corrupted"
-                    return 1
+            log "WARN" "Primary archive download failed, trying alternative URL..."
+            if download_file "$ALTERNATIVE_URL" "dnscrypt.tar.gz" "curl"; then
+                if ! verify_download "dnscrypt.tar.gz"; then
+                    log "WARN" "Alternative archive download failed, trying direct binary..."
+                    if download_file "$BINARY_URL" "$DNSCRYPT_BIN_PATH" "curl"; then
+                        chmod 755 "$DNSCRYPT_BIN_PATH"
+                        log "INFO" "Direct binary download successful"
+                        goto_binary_setup
+                    else
+                        log "ERROR" "All download attempts failed"
+                        return 1
+                    fi
                 fi
             else
                 log "ERROR" "Failed to download from alternative URL"
@@ -315,54 +372,35 @@ install_dnscrypt() {
             fi
         fi
     else
-        # Try wget as fallback
         log "WARN" "Curl download failed, trying wget..."
-        if wget --no-check-certificate --timeout=10 --tries=3 -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
-            if ! verify_download dnscrypt.tar.gz; then
-                log "WARN" "Primary URL wget download corrupted, trying alternative URL..."
-                if wget --no-check-certificate --timeout=10 --tries=3 -O dnscrypt.tar.gz "$ALTERNATIVE_URL" 2>/dev/null; then
-                    if ! verify_download dnscrypt.tar.gz; then
-                        log "ERROR" "All download attempts failed"
-                        return 1
-                    fi
-                else
-                    log "ERROR" "Failed to download from alternative URL using wget"
-                    return 1
-                fi
-            fi
-        else
+        if ! download_file "$DOWNLOAD_URL" "dnscrypt.tar.gz" "wget"; then
             log "ERROR" "All download attempts failed"
             return 1
         fi
     fi
 
-    log "INFO" "Download successful, verifying archive integrity..."
-    
-    # Additional verification before extraction
-    if ! tar tf dnscrypt.tar.gz &>/dev/null; then
-        log "ERROR" "Archive verification failed"
-        return 1
+    # If we have the archive, extract it
+    if [ -f "dnscrypt.tar.gz" ]; then
+        log "INFO" "Extracting archive..."
+        if ! tar xzf dnscrypt.tar.gz; then
+            log "ERROR" "Failed to extract archive"
+            return 1
+        fi
+
+        if [ ! -f "linux-x86_64/dnscrypt-proxy" ]; then
+            log "ERROR" "Binary not found in extracted archive"
+            return 1
+        fi
+
+        cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH" || {
+            log "ERROR" "Failed to copy binary"
+            return 1
+        }
+
+        chmod 755 "$DNSCRYPT_BIN_PATH"
     fi
 
-    # Extract with verbose output
-    if ! tar xvzf dnscrypt.tar.gz; then
-        log "ERROR" "Failed to extract archive"
-        return 1
-    fi
-
-    # Verify extracted contents
-    if [ ! -f "linux-x86_64/dnscrypt-proxy" ]; then
-        log "ERROR" "Expected binary not found in extracted archive"
-        return 1
-    fi
-
-    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH" || {
-        log "ERROR" "Failed to copy binary"
-        return 1
-    }
-
-    chmod 755 "$DNSCRYPT_BIN_PATH"
-    
+    goto_binary_setup:
     # Create directories and set permissions
     mkdir -p /etc/dnscrypt-proxy
     mkdir -p "$DNSCRYPT_CACHE_DIR"
