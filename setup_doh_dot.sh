@@ -315,6 +315,8 @@ collect_diagnostics() {
 }
 
 # Install DNSCrypt
+# ... (начало второй части остается таким же до функции install_dnscrypt)
+
 install_dnscrypt() {
     log "INFO" "=== Installing DNSCrypt-proxy ==="
     save_state "installation"
@@ -359,8 +361,16 @@ install_dnscrypt() {
         return 1
     fi
 
-    tar xzf dnscrypt.tar.gz
-    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"
+    tar xzf dnscrypt.tar.gz || {
+        log "ERROR" "Failed to extract archive"
+        return 1
+    }
+
+    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH" || {
+        log "ERROR" "Failed to copy binary"
+        return 1
+    }
+
     chmod 755 "$DNSCRYPT_BIN_PATH"
     
     # Create directories and set permissions
@@ -370,7 +380,7 @@ install_dnscrypt() {
 
     # Configure DNSCrypt
     log "INFO" "Configuring DNSCrypt-proxy..."
-    cat > "$DNSCRYPT_CONFIG" << EOL
+    cat > "$DNSCRYPT_CONFIG" << 'EOL'
 server_names = ['cloudflare']
 listen_addresses = ['127.0.0.1:53']
 max_clients = 250
@@ -457,13 +467,17 @@ EOL
     fi
     
     # Wait and verify service is running
-    for i in {1..10}; do
+    local max_attempts=10
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
         if systemctl is-active --quiet dnscrypt-proxy; then
             log "INFO" "DNSCrypt-proxy service is running"
             sleep 2
             return 0
-        log "INFO" "Waiting for service to start (attempt $i/10)..."
+        fi
+        log "INFO" "Waiting for service to start (attempt $attempt/$max_attempts)..."
         sleep 2
+        attempt=$((attempt + 1))
     done
 
     log "ERROR" "DNSCrypt-proxy service failed to start within timeout"
