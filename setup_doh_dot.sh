@@ -6,7 +6,7 @@ IFS=$'\n\t'
 
 # Script metadata
 VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 18:48:51"
+SCRIPT_START_TIME="2025-02-14 18:59:26"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -340,26 +340,29 @@ install_dnscrypt() {
     
     log "INFO" "Using download URL: ${DOWNLOAD_URL}"
     
-    # Try multiple download attempts
-    for i in {1..3}; do
-        if wget --no-check-certificate -q "$DOWNLOAD_URL" -O dnscrypt.tar.gz; then
-            log "INFO" "Download successful"
-            break
-        else
-            log "WARN" "Download attempt $i failed, retrying..."
-            sleep 2
-            if [ $i -eq 3 ]; then
-                log "ERROR" "Failed to download DNSCrypt-proxy after 3 attempts"
+    # Try multiple download methods
+    if ! curl -L -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+        log "WARN" "Curl download failed, trying wget..."
+        if ! wget --no-check-certificate -q -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+            log "WARN" "Wget download failed, trying alternative URL..."
+            DOWNLOAD_URL="https://download.dnscrypt.info/dnscrypt-proxy/v${DNSCRYPT_LATEST_VERSION%.*}/dnscrypt-proxy-linux_x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz"
+            log "INFO" "Trying alternative URL: ${DOWNLOAD_URL}"
+            
+            if ! curl -L -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null && \
+               ! wget --no-check-certificate -q -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+                log "ERROR" "All download attempts failed"
                 return 1
             fi
         fi
-    done
+    fi
 
     # Verify download
     if [ ! -s dnscrypt.tar.gz ]; then
         log "ERROR" "Downloaded file is empty"
         return 1
     fi
+
+    log "INFO" "Download successful, verifying archive..."
 
     tar xzf dnscrypt.tar.gz || {
         log "ERROR" "Failed to extract archive"
