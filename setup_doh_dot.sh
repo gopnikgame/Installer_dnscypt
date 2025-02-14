@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.5"
+VERSION="2.0.6"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -145,24 +145,10 @@ install_dependencies() {
   log "INFO" "=== Installing Dependencies ==="
   
   apt-get update
-  apt-get install -y "${REQUIRED_PACKAGES[@]}" jq
+  apt-get install -y "${REQUIRED_PACKAGES[@]}"
   
-  # Fetch the latest release information from GitHub
-  local latest_release_url="https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest"
-  local response=$(curl -fsSL "$latest_release_url")
-  
-  if [[ -z "$response" ]]; then
-    log "ERROR" "Failed to fetch the latest dnscrypt-proxy release information"
-    exit 1
-  fi
-  
-  # Extract the download URL for the Linux x86_64 binary using jq
-  local download_url=$(echo "$response" | jq -r '.assets[] | select(.name | test("linux_x86_64.tar.gz$")) | .browser_download_url')
-  
-  if [[ -z "$download_url" ]]; then
-    log "ERROR" "Failed to find the latest dnscrypt-proxy release for Linux x86_64"
-    exit 1
-  fi
+  # Direct download URL for the latest stable release (v2.1.7)
+  local download_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
   
   log "INFO" "Downloading dnscrypt-proxy from $download_url..."
   local temp_dir=$(mktemp -d)
