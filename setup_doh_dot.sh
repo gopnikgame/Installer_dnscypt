@@ -261,7 +261,116 @@ verify_installation() {
     log "INFO" "DNSCrypt-proxy verification successful"
     return 0
 }
+# Install DNSCrypt
+install_dnscrypt() {
+    log "INFO" "=== Installing DNSCrypt-proxy ==="
+    save_state "installation"
 
+    # Create user and group
+    log "INFO" "Creating DNSCrypt user and group..."
+    groupadd -f "$DNSCRYPT_GROUP"
+    useradd -r -M -N -g "$DNSCRYPT_GROUP" -s /bin/false "$DNSCRYPT_USER" 2>/dev/null || true
+
+    # Download and install binary
+    log "INFO" "Downloading DNSCrypt-proxy..."
+    local arch="x86_64"
+    local os="linux"
+    local download_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_LATEST_VERSION}/dnscrypt-proxy-${os}-${arch}-${DNSCRYPT_LATEST_VERSION}.tar.gz"
+    
+    cd /tmp
+    wget -q "$download_url" -O dnscrypt.tar.gz
+    tar xzf dnscrypt.tar.gz
+    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"
+    chmod 755 "$DNSCRYPT_BIN_PATH"
+    
+    # Create directories and set permissions
+    mkdir -p /etc/dnscrypt-proxy
+    mkdir -p "$DNSCRYPT_CACHE_DIR"
+    chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" "$DNSCRYPT_CACHE_DIR"
+
+    # Configure DNSCrypt
+    log "INFO" "Configuring DNSCrypt-proxy..."
+    cat > "$DNSCRYPT_CONFIG" << EOL
+server_names = ['cloudflare']
+listen_addresses = ['127.0.0.1:53']
+max_clients = 250
+ipv4_servers = true
+ipv6_servers = false
+dnscrypt_servers = true
+doh_servers = true
+require_dnssec = true
+require_nolog = true
+require_nofilter = true
+force_tcp = false
+timeout = 2500
+keepalive = 30
+cert_refresh_delay = 240
+bootstrap_resolvers = ['1.1.1.1:53', '8.8.8.8:53']
+ignore_system_dns = true
+netprobe_timeout = 30
+cache = true
+cache_size = 4096
+cache_min_ttl = 600
+cache_max_ttl = 86400
+cache_neg_min_ttl = 60
+cache_neg_max_ttl = 600
+[static]
+[sources]
+  [sources.'public-resolvers']
+  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md', 'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md']
+  cache_file = '/var/cache/dnscrypt-proxy/public-resolvers.md'
+  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
+  refresh_delay = 72
+  prefix = ''
+EOL
+
+    # Create systemd service
+    log "INFO" "Creating systemd service..."
+    cat > /etc/systemd/system/dnscrypt-proxy.service << EOL
+[Unit]
+Description=DNSCrypt-proxy client
+Documentation=https://github.com/DNSCrypt/dnscrypt-proxy/wiki
+After=network.target
+Before=nss-lookup.target
+Wants=network.target nss-lookup.target
+
+[Service]
+Type=simple
+NonBlocking=true
+User=$DNSCRYPT_USER
+Group=$DNSCRYPT_GROUP
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
+ExecStart=$DNSCRYPT_BIN_PATH -config $DNSCRYPT_CONFIG
+Restart=always
+RestartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Configure system resolver
+    log "INFO" "Configuring system resolver..."
+    systemctl disable systemd-resolved || true
+    systemctl stop systemd-resolved || true
+    
+    rm -f /etc/resolv.conf
+    echo "nameserver 127.0.0.1" > /etc/resolv.conf
+    chattr +i /etc/resolv.conf
+
+    # Start service
+    log "INFO" "Starting DNSCrypt-proxy service..."
+    systemctl daemon-reload
+    systemctl enable dnscrypt-proxy
+    systemctl start dnscrypt-proxy
+    
+    # Wait for service to start
+    sleep 5
+    
+    log "INFO" "DNSCrypt-proxy installation completed"
+}
+# Main installation process
 # Main installation process
 main() {
     log "INFO" "Starting DNSCrypt-proxy installation (Version: $VERSION)"
@@ -273,6 +382,9 @@ main() {
     check_system_state
     check_port_53 || exit 1
     create_backup
+    
+    # Add this line to actually install DNSCrypt
+    install_dnscrypt || exit 1
     
     if verify_installation; then
         log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
