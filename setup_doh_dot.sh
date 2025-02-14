@@ -21,7 +21,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Configuration
 BACKUP_DIR="/etc/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"
-REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw")
+REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw" "dnsutils" "iproute2")
 MIN_DNSCRYPT_VERSION="2.1.0"
 
 # Service configuration
@@ -47,7 +47,7 @@ check_root() {
 
 # Get SSH port safely
 get_ssh_port() {
-  local ssh_port=$(grep -Po '^Port\s+\K\d+' /etc/ssh/sshd_config 2>/dev/null || echo "22")
+  local ssh_port=$(grep -E '^Port\s+' /etc/ssh/sshd_config | awk '{print $2}' || echo "22")
   echo "$ssh_port"
 }
 
@@ -55,13 +55,11 @@ get_ssh_port() {
 check_system() {
   log "INFO" "=== System Compatibility Check ==="
   
-  # Check systemd availability
   if ! command -v systemctl &> /dev/null; then
     log "ERROR" "Systemd is required but not found"
     exit 1
   fi
 
-  # Check required commands
   local required_commands=("dig" "ss" "ufw" "systemctl")
   for cmd in "${required_commands[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
@@ -70,7 +68,6 @@ check_system() {
     fi
   done
 
-  # Check OS compatibility
   if ! grep -qiE 'ubuntu|debian' /etc/os-release; then
     log "WARN" "This script is optimized for Debian/Ubuntu systems"
   fi
@@ -103,27 +100,17 @@ configure_firewall() {
   log "INFO" "=== Configuring Firewall ==="
   local ssh_port=$(get_ssh_port)
 
-  # Backup existing rules
   ufw status numbered > "$BACKUP_DIR/ufw_rules.original"
-
-  # Temporary disable UFW
   ufw --force disable
+  ufw --force reset
 
-  # Reset only our rules
-  while ufw status | grep -q 'DNSCrypt'; do
-    yes | ufw delete 1 &> /dev/null
-  done
-
-  # Default policies
   ufw default deny incoming
   ufw default allow outgoing
 
-  # Critical rules
   ufw allow "$ssh_port/tcp" comment 'SSH Access'
   ufw allow in on lo to any port 53 proto udp comment 'DNSCrypt UDP'
   ufw allow in on lo to any port 53 proto tcp comment 'DNSCrypt TCP'
 
-  # Enable and reload
   echo "y" | ufw enable
   ufw reload
 
@@ -135,11 +122,11 @@ configure_firewall() {
 configure_resolver() {
   log "INFO" "=== Configuring DNS Resolver ==="
   
-  # Stop and disable systemd-resolved stub
-  systemctl stop systemd-resolved
-  systemctl disable systemd-resolved
+  if systemctl list-unit-files | grep -q systemd-resolved; then
+    systemctl stop systemd-resolved
+    systemctl disable systemd-resolved
+  fi
 
-  # Create static resolv.conf
   rm -f /etc/resolv.conf
   cat > /etc/resolv.conf << 'EOL'
 nameserver 127.0.0.53
@@ -147,7 +134,6 @@ options edns0 trust-ad
 search .
 EOL
 
-  # Protect resolv.conf
   chattr +i /etc/resolv.conf 2>/dev/null || true
 }
 
@@ -158,8 +144,7 @@ install_dependencies() {
   apt-get update
   apt-get install -y "${REQUIRED_PACKAGES[@]}"
 
-  # Verify DNSCrypt-proxy version
-  local installed_version=$(dnscrypt-proxy --version | grep -Po '\d+\.\d+\.\d+')
+  local installed_version=$(dnscrypt-proxy --version | awk '{print $2}' | cut -d'-' -f1)
   if ! printf '%s\n%s' "$MIN_DNSCRYPT_VERSION" "$installed_version" | sort -V -C; then
     log "ERROR" "DNSCrypt-proxy version $MIN_DNSCRYPT_VERSION or higher required"
     exit 1
@@ -170,12 +155,10 @@ install_dependencies() {
 configure_dnscrypt() {
   log "INFO" "=== Configuring DNSCrypt-proxy ==="
   
-  # Create service user
   if ! id "$DNSCRYPT_USER" &> /dev/null; then
     useradd -r -d /var/empty -s /bin/false "$DNSCRYPT_USER"
   fi
 
-  # Generate configuration
   cat > "$DNSCRYPT_CONFIG" << 'EOL'
 server_names = ['cloudflare', 'quad9-doh-ip4-filter-pri']
 
@@ -202,11 +185,9 @@ log_file = '/var/log/dnscrypt-proxy.log'
   refresh_delay = 72
 EOL
 
-  # Set permissions
   chown -R "$DNSCRYPT_USER":"$DNSCRYPT_GROUP" /etc/dnscrypt-proxy
   chmod 644 "$DNSCRYPT_CONFIG"
 
-  # Service configuration
   systemctl enable dnscrypt-proxy
   systemctl restart dnscrypt-proxy
 }
@@ -216,19 +197,16 @@ verify_installation() {
   log "INFO" "=== Verifying Installation ==="
   local success=0
 
-  # Service status check
   if ! systemctl is-active --quiet dnscrypt-proxy; then
     log "ERROR" "DNSCrypt-proxy service not running"
     success=1
   fi
 
-  # Port binding check
   if ! ss -tuln | grep -q '127.0.0.53:53'; then
     log "ERROR" "DNSCrypt-proxy not bound to port 53"
     success=1
   fi
 
-  # DNS resolution test
   local test_domains=("google.com" "cloudflare.com" "example.com")
   for domain in "${test_domains[@]}"; do
     if ! dig +short +timeout=3 "$domain" @127.0.0.53 >/dev/null; then
@@ -237,7 +215,6 @@ verify_installation() {
     fi
   done
 
-  # SSH connectivity check
   if ! timeout 3 bash -c "echo > /dev/tcp/localhost/$(get_ssh_port)"; then
     log "ERROR" "SSH port not accessible"
     success=1
@@ -250,24 +227,17 @@ verify_installation() {
 rollback_system() {
   log "ERROR" "=== INSTALLATION FAILED - INITIATING ROLLBACK ==="
   
-  # Restore UFW rules
   if [ -f "$BACKUP_DIR/ufw_rules.original" ]; then
     ufw --force reset
-    while read -r rule; do
-      if [[ $rule =~ .*ALLOW.* ]]; then
-        ufw allow "$(echo "$rule" | awk '{print $2}')"
-      fi
-    done < "$BACKUP_DIR/ufw_rules.original"
+    ufw --force import "$BACKUP_DIR/ufw_rules.original"
     ufw --force enable
   fi
 
-  # Restore original resolver
   chattr -i /etc/resolv.conf 2>/dev/null || true
   if [ -f "$BACKUP_DIR/etc/resolv.conf" ]; then
     cp -f "$BACKUP_DIR/etc/resolv.conf" /etc/resolv.conf
   fi
 
-  # Restart services
   systemctl restart systemd-resolved
 
   log "ERROR" "Rollback completed. System should be in original state."
@@ -280,13 +250,12 @@ main() {
 
   check_root
   check_system
-  create_backup
   install_dependencies
+  create_backup
   configure_resolver
   configure_firewall
   configure_dnscrypt
 
-  # Final verification
   if verify_installation; then
     log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
     log "INFO" "Backup Directory: $BACKUP_DIR"
