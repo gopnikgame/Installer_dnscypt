@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.13"
+VERSION="2.0.14"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -235,10 +235,22 @@ install_dependencies() {
   log "INFO" "Installed DNSCrypt-proxy version: $installed_version"
   
   # Set capabilities for binding to privileged ports
+  set_capabilities
+}
+
+# Set capabilities for binding to privileged ports
+set_capabilities() {
   if ! command -v setcap &> /dev/null; then
     apt-get install -y libcap2-bin
   fi
-  setcap cap_net_bind_service=+ep "$DNSCRYPT_BIN_PATH"
+  
+  log "INFO" "Setting capabilities for binding to port 53..."
+  if setcap cap_net_bind_service=+ep "$DNSCRYPT_BIN_PATH"; then
+    log "INFO" "Capabilities set successfully."
+  else
+    log "ERROR" "Failed to set capabilities for binding to port 53."
+    exit 1
+  fi
 }
 
 # Main DNSCrypt configuration
@@ -282,6 +294,16 @@ EOL
   
   # Wait for the service to start
   sleep 5
+  
+  # Log service status for debugging
+  log "DEBUG" "dnscrypt-proxy service status:"
+  systemctl status dnscrypt-proxy --no-pager
+  
+  # Log last few lines of the log file
+  if [[ -f "/var/log/dnscrypt-proxy.log" ]]; then
+    log "DEBUG" "Last 10 lines of /var/log/dnscrypt-proxy.log:"
+    tail -n 10 /var/log/dnscrypt-proxy.log
+  fi
 }
 
 # Installation verification
@@ -290,19 +312,22 @@ verify_installation() {
   local success=0
   
   if ! systemctl is-active --quiet dnscrypt-proxy; then
-    log "ERROR" "DNSCrypt-proxy service not running"
+    log "ERROR" "DNSCrypt-proxy service not running. Service status:"
+    systemctl status dnscrypt-proxy --no-pager
     success=1
   fi
   
   if ! ss -tuln | grep -q '127.0.0.53:53'; then
-    log "ERROR" "DNSCrypt-proxy not bound to port 53"
+    log "ERROR" "DNSCrypt-proxy not bound to port 53. Listening ports:"
+    ss -tuln
     success=1
   fi
   
   local test_domains=("google.com" "cloudflare.com" "example.com")
   for domain in "${test_domains[@]}"; do
     if ! dig +short +timeout=3 "$domain" @127.0.0.53 >/dev/null; then
-      log "ERROR" "Failed to resolve $domain"
+      log "ERROR" "Failed to resolve $domain. DNS query result:"
+      dig +short "$domain" @127.0.0.53
       success=1
     fi
   done
@@ -339,11 +364,23 @@ rollback_system() {
   exit 1
 }
 
+# Check if port 53 is already in use
+check_port_53() {
+  log "INFO" "Checking if port 53 is already in use..."
+  if ss -tuln | grep -q ':53 '; then
+    log "ERROR" "Port 53 is already in use by another process."
+    ss -tuln | grep ':53 '
+    exit 1
+  fi
+  log "INFO" "Port 53 is available."
+}
+
 # Main installation process
 main() {
   trap rollback_system ERR
   check_root
   check_system
+  check_port_53
   install_dependencies
   create_backup
   configure_resolver
