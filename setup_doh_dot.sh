@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.11"
+VERSION="2.0.12"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -130,14 +130,31 @@ configure_resolver() {
   fi
   
   log "INFO" "Creating static resolv.conf..."
-  rm -f /etc/resolv.conf
+  
+  # Check if /etc/resolv.conf is a symbolic link
+  if [[ -L "/etc/resolv.conf" ]]; then
+    log "INFO" "/etc/resolv.conf is a symbolic link. Removing it..."
+    unlink /etc/resolv.conf || true
+  elif [[ -f "/etc/resolv.conf" ]]; then
+    log "INFO" "/etc/resolv.conf is a regular file. Backing it up..."
+    cp /etc/resolv.conf /etc/resolv.conf.bak
+    rm -f /etc/resolv.conf
+  fi
+  
+  # Remove immutable attribute if present
+  chattr -i /etc/resolv.conf 2>/dev/null || true
+  
+  # Create the new static resolv.conf
   cat > /etc/resolv.conf << 'EOL'
 nameserver 127.0.0.53
 options edns0 trust-ad
 search .
 EOL
   
+  # Set immutable attribute to prevent accidental modification
   chattr +i /etc/resolv.conf 2>/dev/null || true
+  
+  log "INFO" "Static resolv.conf created."
 }
 
 # Install required packages
