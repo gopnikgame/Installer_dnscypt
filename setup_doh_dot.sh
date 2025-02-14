@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script version
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Colors for output
 RED='\033[0;31m'
@@ -109,6 +109,19 @@ show_dns_settings() {
         echo -e "\nResolv Configuration:"
         cat /etc/resolv.conf
     } | tee "$1"
+}
+
+# Function to reset system DNS resolver to default
+reset_dns_resolver() {
+    log_message "INFO" "=== Resetting DNS resolver to default ==="
+    cat > /etc/systemd/resolved.conf << 'EOL'
+[Resolve]
+DNS=
+FallbackDNS=
+DNSStubListener=yes
+Cache=no
+EOL
+    systemctl restart systemd-resolved
 }
 
 # Function to install required packages
@@ -217,6 +230,23 @@ main() {
     check_system
     create_backups
     show_dns_settings "${BACKUP_DIR}/pre_install_settings.txt"
+    
+    # Check if DNSCrypt-proxy is already installed
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        log_message "INFO" "DNSCrypt-proxy is already installed. Reinstalling..."
+        systemctl stop dnscrypt-proxy
+        apt remove --purge -y dnscrypt-proxy
+    fi
+    
+    # Check and reset DNS resolver if needed
+    if ! resolvectl status | grep -q 'DNS Servers'; then
+        reset_dns_resolver
+        if ! resolvectl status | grep -q 'DNS Servers'; then
+            log_message "ERROR" "Failed to reset DNS resolver"
+            exit 1
+        fi
+    fi
+    
     install_packages
     configure_dnscrypt
     manage_ufw
