@@ -26,7 +26,7 @@ log_message() {
     local level=$1
     local message=$2
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo -e "${timestamp} [${level}] ${message}"
+    printf "%s [%s] %s\n" "$timestamp" "$level" "$message"
 }
 
 # Function to check system compatibility
@@ -37,13 +37,13 @@ check_system() {
     if [[ $EUID -ne 0 ]]; then
         log_message "ERROR" "This script must be run as root"
         exit 1
-    }
+    fi
 
     # Check if systemd is present
     if ! command -v systemctl >/dev/null 2>&1; then
         log_message "ERROR" "This script requires systemd"
         exit 1
-    }
+    fi
 
     # Check for required commands
     for cmd in dig ss ufw systemctl; do
@@ -77,27 +77,24 @@ create_backups() {
 manage_ufw() {
     log_message "INFO" "=== Configuring UFW firewall ==="
     
-    # Ensure UFW is installed and enabled
+    # Ensure UFW is installed
+    if ! command -v ufw >/dev/null 2>&1; then
+        log_message "INFO" "UFW is not installed. Installing..."
+        apt install -y ufw
+    fi
+    
+    # Enable UFW if not active
     if ! systemctl is-active --quiet ufw; then
         log_message "INFO" "Enabling UFW..."
-        ufw --force enable
+        ufw enable --force
     fi
     
     # Backup current UFW rules
     ufw status verbose > "${BACKUP_DIR}/ufw_status.before"
     
     # Configure UFW rules for DNSCrypt
-    local rules=(
-        "allow in on lo to 127.0.0.53 port 53 proto udp"
-        "allow in on lo to 127.0.0.53 port 53 proto tcp"
-    )
-    
-    for rule in "${rules[@]}"; do
-        if ! ufw status verbose | grep -q "$rule"; then
-            log_message "INFO" "Adding UFW rule: $rule"
-            ufw $rule
-        fi
-    done
+    ufw allow in on lo to 127.0.0.53 port 53 proto udp
+    ufw allow in on lo to 127.0.0.53 port 53 proto tcp
     
     ufw reload
     log_message "INFO" "UFW configuration completed"
@@ -158,7 +155,6 @@ cache_max_ttl = 86400
 
 # Security settings
 tls_disable_session_tickets = true
-dnscrypt_ephemeral_keys = true
 refuse_any = true
 
 # IPv6 configuration
@@ -171,10 +167,6 @@ ipv6_servers = true
 
   [static.'cloudflare']
   stamp = 'sdns://AgcAAAAAAAAABzEuMC4wLjGgENkGmDNSOVe_Lp5I2e0dTH0qHK3uUIpWP6gx7WgPgs0VZG5zLmNsb3VkZmxhcmUuY29tCi9kbnMtcXVlcnk'
-
-# Additional security settings
-blocked_names_file = '/etc/dnscrypt-proxy/blocked-names.txt'
-blocked_ips_file = '/etc/dnscrypt-proxy/blocked-ips.txt'
 EOL
 
     # Configure systemd-resolved
@@ -187,10 +179,6 @@ FallbackDNS=1.1.1.1 9.9.9.9
 DNSStubListener=no
 Cache=yes
 EOL
-
-    # Create empty blocklists if they don't exist
-    touch /etc/dnscrypt-proxy/blocked-names.txt
-    touch /etc/dnscrypt-proxy/blocked-ips.txt
 }
 
 # Function to verify installation
@@ -211,12 +199,14 @@ verify_installation() {
     fi
     
     # Test DNS resolution
-    if ! dig +short +timeout=5 google.com @127.0.0.53 >/dev/null; then
-        log_message "ERROR" "DNS resolution test failed"
-        verification_failed=1
-    fi
-    
-    return $verification_failed
+    for i in {1..3}; do
+        if dig +short +timeout=5 google.com @127.0.0.53 >/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    log_message "ERROR" "DNS resolution test failed"
+    return 1
 }
 
 # Main installation process
@@ -237,7 +227,9 @@ main() {
     systemctl restart systemd-resolved
     
     # Verify installation
-    if ! verify_installation; then
+    if verify_installation; then
+        log_message "INFO" "Verification succeeded"
+    else
         log_message "ERROR" "Installation verification failed"
         log_message "INFO" "Check ${LOG_FILE} for details"
         exit 1
