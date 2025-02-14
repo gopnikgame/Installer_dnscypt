@@ -6,7 +6,7 @@ IFS=$'\n\t'
 
 # Script metadata
 VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 19:10:19"
+SCRIPT_START_TIME="2025-02-14 19:15:20"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -484,13 +484,9 @@ main() {
         rollback_system
         exit 1
     fi
-    
     log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
-    log "INFO" "Backup Directory: $BACKUP_DIR"
-    log "INFO
-    log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
-    log "INFO" "Backup Directory: $BACKUP_DIR"
-    log "INFO" "Installation Log: $LOG_FILE"
+    log "INFO" "Backup Directory: ${BACKUP_DIR}"
+    log "INFO" "Installation Log: ${LOG_FILE}"
     
     # Final configuration verification
     log "INFO" "Performing final checks..."
@@ -507,23 +503,33 @@ main() {
 
 # Error handler
 error_handler() {
-    local line_no=$1
-    local command=$2
-    local exit_code=$3
+    local line_no="$1"
+    local command="$2"
+    local exit_code="$3"
     
-    log "ERROR" "Script failed at line $line_no"
-    log "ERROR" "Failed command: $command"
-    log "ERROR" "Exit code: $exit_code"
+    log "ERROR" "Script failed at line ${line_no}"
+    log "ERROR" "Failed command: ${command}"
+    log "ERROR" "Exit code: ${exit_code}"
     
     collect_diagnostics
     rollback_system
 }
 
 # Set error handler
-trap 'error_handler ${LINENO} "$BASH_COMMAND" $?' ERR
+trap 'error_handler ${LINENO} "${BASH_COMMAND}" $?' ERR
+
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        log "ERROR" "Script failed with exit code ${exit_code}"
+        rollback_system
+    fi
+}
 
 # Set cleanup handler
 trap cleanup EXIT
 
 # Start installation
 main
+    
