@@ -189,26 +189,39 @@ install_packages() {
 configure_dnscrypt() {
     log_message "INFO" "=== Configuring DNSCrypt-Proxy ==="
     
-    # Stop services before configuration
+    # Stop all related services first
+    systemctl stop dnscrypt-proxy.socket || true
+    systemctl stop dnscrypt-proxy.service || true
     systemctl stop systemd-resolved || true
-    systemctl stop dnscrypt-proxy || true
 
     # Get correct user and group for dnscrypt-proxy
-    local DNSCRYPT_USER=$(getent passwd | grep dnscrypt-proxy | cut -d: -f1)
-    local DNSCRYPT_GROUP=$(getent group | grep dnscrypt-proxy | cut -d: -f1)
+    # First try standard names
+    for user in "dnscrypt-proxy" "_dnscrypt-proxy" "dnscrypt"; do
+        if id "$user" >/dev/null 2>&1; then
+            DNSCRYPT_USER="$user"
+            break
+        fi
+    done
 
-    if [ -z "$DNSCRYPT_USER" ] || [ -z "$DNSCRYPT_GROUP" ]; then
-        log_message "INFO" "DNSCrypt user/group not found, using system defaults"
+    # If no user found, create one
+    if [ -z "${DNSCRYPT_USER:-}" ]; then
         DNSCRYPT_USER="dnscrypt-proxy"
         DNSCRYPT_GROUP="dnscrypt-proxy"
-        # Create user and group if they don't exist
+        
+        # Create group if it doesn't exist
         if ! getent group "$DNSCRYPT_GROUP" >/dev/null; then
             groupadd -r "$DNSCRYPT_GROUP"
         fi
-        if ! getent passwd "$DNSCRYPT_USER" >/dev/null; then
+        
+        # Create user if it doesn't exist
+        if ! id "$DNSCRYPT_USER" >/dev/null 2>&1; then
             useradd -r -g "$DNSCRYPT_GROUP" -s /bin/false -d /var/cache/dnscrypt-proxy "$DNSCRYPT_USER"
         fi
+    else
+        DNSCRYPT_GROUP=$(id -gn "$DNSCRYPT_USER")
     fi
+
+    log_message "INFO" "Using user:group = $DNSCRYPT_USER:$DNSCRYPT_GROUP"
 
     # Configure systemd-resolved first
     cat > /etc/systemd/resolved.conf << 'EOL'
@@ -252,14 +265,6 @@ cache_max_ttl = 86400
 cache_neg_min_ttl = 60
 cache_neg_max_ttl = 600
 
-[query_log]
-  file = '/var/log/dnscrypt-proxy/query.log'
-  format = 'tsv'
-
-[nx_log]
-  file = '/var/log/dnscrypt-proxy/nx.log'
-  format = 'tsv'
-
 [sources]
   [sources.'public-resolvers']
     urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md', 'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md']
@@ -293,7 +298,13 @@ EOL
     chown -R root:root /etc/dnscrypt-proxy
     chmod 644 /etc/dnscrypt-proxy/dnscrypt-proxy.toml
 
-    # Enable services
+    # Disable socket activation if it exists
+    if [ -f "/lib/systemd/system/dnscrypt-proxy.socket" ]; then
+        systemctl disable dnscrypt-proxy.socket
+        systemctl stop dnscrypt-proxy.socket
+    fi
+
+    # Enable and start services
     systemctl enable dnscrypt-proxy
     systemctl enable systemd-resolved
 
