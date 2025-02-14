@@ -6,7 +6,7 @@ IFS=$'\n\t'
 
 # Script metadata
 VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 19:20:07"
+SCRIPT_START_TIME="2025-02-14 19:43:20"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -260,7 +260,6 @@ rollback_system() {
     log "INFO" "System rollback completed"
 }
 
-# Install DNSCrypt
 install_dnscrypt() {
     log "INFO" "=== Installing DNSCrypt-proxy ==="
     save_state "installation"
@@ -290,7 +289,7 @@ install_dnscrypt() {
         if [ ! -f "$file" ]; then
             log "ERROR" "File does not exist: $file"
             return 1
-        }
+        fi
         
         # Check file size
         local file_size=$(stat -c%s "$file")
@@ -298,7 +297,7 @@ install_dnscrypt() {
         if [ "$file_size" -lt 1000 ]; then
             log "ERROR" "File is too small: $file_size bytes"
             return 1
-        }
+        fi
         
         # Check file type using hexdump
         local file_header=$(hexdump -n 2 -e '2/1 "%02x"' "$file")
@@ -307,7 +306,7 @@ install_dnscrypt() {
             log "ERROR" "Invalid gzip header: $file_header (expected: 1f8b)"
             rm -f "$file"
             return 1
-        }
+        fi
         
         # Additional file type check
         local file_type=$(file -b "$file")
@@ -360,7 +359,6 @@ install_dnscrypt() {
                     if download_file "$BINARY_URL" "$DNSCRYPT_BIN_PATH" "curl"; then
                         chmod 755 "$DNSCRYPT_BIN_PATH"
                         log "INFO" "Direct binary download successful"
-                        goto_binary_setup
                     else
                         log "ERROR" "All download attempts failed"
                         return 1
@@ -380,7 +378,7 @@ install_dnscrypt() {
     fi
 
     # If we have the archive, extract it
-    if [ -f "dnscrypt.tar.gz" ]; then
+    if [ -f "dnscrypt.tar.gz" ] && [ ! -f "$DNSCRYPT_BIN_PATH" ]; then
         log "INFO" "Extracting archive..."
         if ! tar xzf dnscrypt.tar.gz; then
             log "ERROR" "Failed to extract archive"
@@ -400,7 +398,6 @@ install_dnscrypt() {
         chmod 755 "$DNSCRYPT_BIN_PATH"
     fi
 
-    goto_binary_setup:
     # Create directories and set permissions
     mkdir -p /etc/dnscrypt-proxy
     mkdir -p "$DNSCRYPT_CACHE_DIR"
@@ -510,24 +507,6 @@ EOL
 
     log "ERROR" "DNSCrypt-proxy service failed to start within timeout"
     return 1
-}
-
-# Installation verification
-verify_installation() {
-    log "INFO" "Verifying DNSCrypt-proxy installation..."
-    
-    if ! systemctl is-active --quiet dnscrypt-proxy; then
-        log "ERROR" "DNSCrypt-proxy service is not running"
-        return 1
-    fi
-    
-    if ! dig +short +timeout=3 google.com @127.0.0.1 >/dev/null; then
-        log "ERROR" "DNS resolution test failed"
-        return 1
-    fi
-    
-    log "INFO" "DNSCrypt-proxy verification successful"
-    return 0
 }
 
 # Error handler
