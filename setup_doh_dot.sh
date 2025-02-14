@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.3"
+VERSION="2.0.4"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -147,9 +147,17 @@ install_dependencies() {
   apt-get update
   apt-get install -y "${REQUIRED_PACKAGES[@]}"
   
-  # Download and install the latest dnscrypt-proxy binary
+  # Fetch the latest release information from GitHub
   local latest_release_url="https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest"
-  local download_url=$(curl -s "$latest_release_url" | grep "browser_download_url.*linux_x86_64.tar.gz" | cut -d '"' -f 4)
+  local response=$(curl -fsSL "$latest_release_url")
+  
+  if [[ -z "$response" ]]; then
+    log "ERROR" "Failed to fetch the latest dnscrypt-proxy release information"
+    exit 1
+  fi
+  
+  # Extract the download URL for the Linux x86_64 binary
+  local download_url=$(echo "$response" | grep -oE "https://.*?linux_x86_64\.tar\.gz" | head -n 1)
   
   if [[ -z "$download_url" ]]; then
     log "ERROR" "Failed to find the latest dnscrypt-proxy release for Linux x86_64"
@@ -160,6 +168,12 @@ install_dependencies() {
   local temp_dir=$(mktemp -d)
   pushd "$temp_dir" >/dev/null
   curl -fsSL -o dnscrypt-proxy.tar.gz "$download_url"
+  
+  if [[ ! -f "dnscrypt-proxy.tar.gz" ]]; then
+    log "ERROR" "Failed to download dnscrypt-proxy binary"
+    exit 1
+  fi
+  
   tar -xzf dnscrypt-proxy.tar.gz
   
   # Install the binary
