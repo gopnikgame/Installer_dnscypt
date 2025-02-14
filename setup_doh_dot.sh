@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.8"
+VERSION="2.0.9"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -177,7 +177,9 @@ install_dependencies() {
     exit 1
   fi
   
-  log "INFO" "Installing dnscrypt-proxy binary..."
+  log "INFO" "Installing dnscrypt-proxy binary from path: $binary_path"
+  
+  # Ensure the full path is used when moving the binary
   mv "$binary_path" "$DNSCRYPT_BIN_PATH"
   chmod +x "$DNSCRYPT_BIN_PATH"
   
@@ -186,9 +188,14 @@ install_dependencies() {
   rm -rf "$temp_dir"
   
   # Check installed version
+  if ! command -v "$DNSCRYPT_BIN_PATH" &> /dev/null; then
+    log "ERROR" "Failed to install dnscrypt-proxy binary"
+    exit 1
+  fi
+  
   local installed_version=$("$DNSCRYPT_BIN_PATH" --version | awk '{print $2}' | cut -d'-' -f1)
   if dpkg --compare-versions "$installed_version" lt "$MIN_DNSCRYPT_VERSION"; then
-    log "ERROR" "DNSCrypt-proxy version $MIN_DNSCRYPT_VERSION or higher required"
+    log "ERROR" "DNSCrypt-proxy version $MIN_DNSCRYPT_VERSION or higher required. Installed version: $installed_version"
     exit 1
   fi
   
