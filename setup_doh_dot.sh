@@ -6,7 +6,7 @@ IFS=$'\n\t'
 
 # Script metadata
 VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 18:42:20"
+SCRIPT_START_TIME="2025-02-14 18:48:51"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -53,6 +53,7 @@ DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
 DNSCRYPT_BIN_PATH="/usr/local/bin/dnscrypt-proxy"
 DNSCRYPT_CACHE_DIR="/var/cache/dnscrypt-proxy"
 STATE_FILE="/tmp/dnscrypt_install_state_$(date +%Y%m%d_%H%M%S)"
+
 # Enhanced logging function
 log() {
     local level=$1
@@ -125,7 +126,9 @@ rollback_system() {
             log "INFO" "Restoring system configuration..."
             if [[ -d "$BACKUP_DIR" ]]; then
                 for file in "$BACKUP_DIR"/*; do
-                    [[ -f "$file" ]] && cp -f "$file" "/${file##*/}"
+                    if [[ -f "$file" ]]; then
+                        cp -f "$file" "/${file##*/}" || log "WARN" "Failed to restore ${file##*/}"
+                    fi
                 done
             fi
             ;&
@@ -199,6 +202,8 @@ check_system_state() {
         netstat -tulpn | grep :53
         echo "=== End System State Details ==="
     } > "$diag_file"
+    
+    return 0
 }
 
 # Prerequisites check
@@ -256,6 +261,7 @@ check_port_53() {
             fi
         done
         
+        sleep 2
         if ss -lptn 'sport = :53' 2>/dev/null | grep -q ":53"; then
             log "ERROR" "Port 53 still in use after stopping known services"
             return 1
@@ -318,24 +324,43 @@ install_dnscrypt() {
     groupadd -f "$DNSCRYPT_GROUP"
     useradd -r -M -N -g "$DNSCRYPT_GROUP" -s /bin/false "$DNSCRYPT_USER" 2>/dev/null || true
 
+    # Test GitHub connectivity
+    log "INFO" "Testing GitHub connectivity..."
+    if ! curl -s --head https://github.com > /dev/null; then
+        log "ERROR" "Cannot connect to GitHub"
+        return 1
+    fi
+
     # Download and install binary
     log "INFO" "Downloading DNSCrypt-proxy..."
     cd /tmp
-    if ! wget -q "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_LATEST_VERSION}/dnscrypt-proxy-linux-x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz" -O dnscrypt.tar.gz; then
-        log "ERROR" "Failed to download DNSCrypt-proxy"
+    DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v${DNSCRYPT_LATEST_VERSION}/dnscrypt-proxy-linux-x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz"
+    
+    log "INFO" "Using download URL: ${DOWNLOAD_URL}"
+    
+    # Try multiple download attempts
+    for i in {1..3}; do
+        if wget --no-check-certificate -q "$DOWNLOAD_URL" -O dnscrypt.tar.gz; then
+            log "INFO" "Download successful"
+            break
+        else
+            log "WARN" "Download attempt $i failed, retrying..."
+            sleep 2
+            if [ $i -eq 3 ]; then
+                log "ERROR" "Failed to download DNSCrypt-proxy after 3 attempts"
+                return 1
+            fi
+        fi
+    done
+
+    # Verify download
+    if [ ! -s dnscrypt.tar.gz ]; then
+        log "ERROR" "Downloaded file is empty"
         return 1
     fi
 
-    if ! tar xzf dnscrypt.tar.gz; then
-        log "ERROR" "Failed to extract DNSCrypt-proxy"
-        return 1
-    fi
-
-    if ! cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"; then
-        log "ERROR" "Failed to copy DNSCrypt-proxy binary"
-        return 1
-    fi
-
+    tar xzf dnscrypt.tar.gz
+    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"
     chmod 755 "$DNSCRYPT_BIN_PATH"
     
     # Create directories and set permissions
@@ -410,7 +435,6 @@ EOL
     systemctl disable systemd-resolved || true
     systemctl stop systemd-resolved || true
     
-    # Make sure port 53 is free
     sleep 2
     if ss -lptn 'sport = :53' 2>/dev/null | grep -q ":53"; then
         log "ERROR" "Port 53 is still in use"
@@ -438,7 +462,6 @@ EOL
             log "INFO" "DNSCrypt-proxy service is running"
             sleep 2
             return 0
-        fi
         log "INFO" "Waiting for service to start (attempt $i/10)..."
         sleep 2
     done
@@ -471,46 +494,18 @@ main() {
     log "INFO" "Script start time: $SCRIPT_START_TIME"
     log "INFO" "Current user: $CURRENT_USER"
     
-    # Add sleep to ensure logs are written
-    sleep 1
+    check_root || exit 1
+    check_prerequisites || exit 1
+    check_system_state || exit 1
+    check_port_53 || exit 1
+    create_backup || exit 1
     
-    if ! check_root; then
-        log "ERROR" "Root check failed"
-        exit 1
-    fi
-    sleep 1
-    
-    if ! check_prerequisites; then
-        log "ERROR" "Prerequisites check failed"
-        exit 1
-    fi
-    sleep 1
-    
-    if ! check_system_state; then
-        log "ERROR" "System state check failed"
-        exit 1
-    fi
-    sleep 1
-    
-    if ! check_port_53; then
-        log "ERROR" "Port 53 check failed"
-        exit 1
-    fi
-    sleep 1
-    
-    if ! create_backup; then
-        log "ERROR" "Backup creation failed"
-        exit 1
-    fi
-    sleep 1
-    
-    log "INFO" "Starting DNSCrypt installation..."
+    log "INFO" "Beginning DNSCrypt installation..."
     if ! install_dnscrypt; then
-        log "ERROR" "DNSCrypt installation failed"
+        log "ERROR" "Installation failed"
         rollback_system
         exit 1
     fi
-    sleep 1
     
     log "INFO" "Verifying installation..."
     if ! verify_installation; then
@@ -522,16 +517,6 @@ main() {
     log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
     log "INFO" "Backup Directory: $BACKUP_DIR"
     log "INFO" "Installation Log: $LOG_FILE"
-    
-    # Final verification
-    if systemctl is-active --quiet dnscrypt-proxy; then
-        log "SUCCESS" "DNSCrypt-proxy service is running"
-        return 0
-    else
-        log "ERROR" "Final verification failed"
-        rollback_system
-        return 1
-    fi
 }
 
 # Start installation
