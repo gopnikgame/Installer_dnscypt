@@ -5,8 +5,9 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 18:59:26"
+SCRIPT_START_TIME="2025-02-14 19:03:55"
+CURRENT_USER="gopnikgame"
+DNSCRYPT_LATEST_VERSION="2.1.7"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -334,22 +335,28 @@ install_dnscrypt() {
     fi
 
     # Download and install binary
+     # Download and install binary
     log "INFO" "Downloading DNSCrypt-proxy..."
     cd /tmp
-    DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v${DNSCRYPT_LATEST_VERSION}/dnscrypt-proxy-linux-x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz"
+    rm -f dnscrypt.tar.gz # Очищаем предыдущие загрузки
+    
+    # Прямая ссылка на конкретную версию
+    DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
     
     log "INFO" "Using download URL: ${DOWNLOAD_URL}"
     
-    # Try multiple download methods
-    if ! curl -L -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+    # Пробуем загрузить с помощью curl с подробным выводом
+    log "INFO" "Attempting download with curl..."
+    if curl -L -v -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
+        log "INFO" "Curl download successful"
+    else
         log "WARN" "Curl download failed, trying wget..."
-        if ! wget --no-check-certificate -q -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
-            log "WARN" "Wget download failed, trying alternative URL..."
-            DOWNLOAD_URL="https://download.dnscrypt.info/dnscrypt-proxy/v${DNSCRYPT_LATEST_VERSION%.*}/dnscrypt-proxy-linux_x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz"
+        if ! wget --no-check-certificate -v -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
+            # Пробуем альтернативный URL
+            DOWNLOAD_URL="https://download.dnscrypt.info/dnscrypt-proxy/v2.1/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
             log "INFO" "Trying alternative URL: ${DOWNLOAD_URL}"
             
-            if ! curl -L -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null && \
-               ! wget --no-check-certificate -q -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>/dev/null; then
+            if ! curl -L -v -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
                 log "ERROR" "All download attempts failed"
                 return 1
             fi
@@ -362,17 +369,25 @@ install_dnscrypt() {
         return 1
     fi
 
-    log "INFO" "Download successful, verifying archive..."
+    # Check if file is actually a gzip archive
+    if ! file dnscrypt.tar.gz | grep -q "gzip compressed data"; then
+        log "ERROR" "Downloaded file is not a valid gzip archive"
+        return 1
+    fi
 
-    tar xzf dnscrypt.tar.gz || {
+    log "INFO" "Download successful, verifying archive..."
+    
+    # Extract with verbose output
+    if ! tar xvzf dnscrypt.tar.gz; then
         log "ERROR" "Failed to extract archive"
         return 1
-    }
+    fi
 
-    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH" || {
-        log "ERROR" "Failed to copy binary"
+    # Verify extracted contents
+    if [ ! -f "linux-x86_64/dnscrypt-proxy" ]; then
+        log "ERROR" "Expected binary not found in extracted archive"
         return 1
-    }
+    fi
 
     chmod 755 "$DNSCRYPT_BIN_PATH"
     
