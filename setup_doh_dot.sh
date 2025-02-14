@@ -5,9 +5,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-SCRIPT_START_TIME="2025-02-14 19:03:55"
-CURRENT_USER="gopnikgame"
-DNSCRYPT_LATEST_VERSION="2.1.7"
+VERSION="2.0.17"
+SCRIPT_START_TIME="2025-02-14 19:10:19"
 CURRENT_USER="gopnikgame"
 
 # Colors for output with enhanced visibility
@@ -93,91 +92,6 @@ run_cmd() {
     return 0
 }
 
-# Rollback system changes
-rollback_system() {
-    log "INFO" "=== Starting System Rollback ==="
-    local state=$(load_state)
-    
-    case "$state" in
-        "installation")
-            log "INFO" "Rolling back DNSCrypt-proxy installation..."
-            systemctl stop dnscrypt-proxy 2>/dev/null || true
-            systemctl disable dnscrypt-proxy 2>/dev/null || true
-            rm -f /etc/systemd/system/dnscrypt-proxy.service
-            systemctl daemon-reload
-            
-            # Remove DNSCrypt files
-            rm -f "$DNSCRYPT_BIN_PATH"
-            rm -rf "/etc/dnscrypt-proxy"
-            rm -rf "$DNSCRYPT_CACHE_DIR"
-            
-            # Restore resolv.conf
-            chattr -i /etc/resolv.conf 2>/dev/null || true
-            if [[ -f "$BACKUP_DIR/resolv.conf" ]]; then
-                cp "$BACKUP_DIR/resolv.conf" /etc/resolv.conf
-            else
-                echo "nameserver 8.8.8.8" > /etc/resolv.conf
-            fi
-            
-            # Restart system resolver
-            systemctl enable systemd-resolved 2>/dev/null || true
-            systemctl start systemd-resolved 2>/dev/null || true
-            ;&
-        "backup")
-            log "INFO" "Restoring system configuration..."
-            if [[ -d "$BACKUP_DIR" ]]; then
-                for file in "$BACKUP_DIR"/*; do
-                    if [[ -f "$file" ]]; then
-                        cp -f "$file" "/${file##*/}" || log "WARN" "Failed to restore ${file##*/}"
-                    fi
-                done
-            fi
-            ;&
-        "port_check")
-            log "INFO" "Restoring DNS services..."
-            for service in systemd-resolved named bind9 dnsmasq unbound; do
-                if systemctl is-enabled "$service" &>/dev/null; then
-                    systemctl start "$service" 2>/dev/null || true
-                fi
-            done
-            ;;
-        *)
-            log "WARN" "No state found, performing full rollback..."
-            ;;
-    esac
-    
-    log "INFO" "System rollback completed"
-}
-
-# Error handler
-error_handler() {
-    local line_no=$1
-    local command=$2
-    local exit_code=$3
-    
-    log "ERROR" "Script failed at line $line_no"
-    log "ERROR" "Failed command: $command"
-    log "ERROR" "Exit code: $exit_code"
-    
-    collect_diagnostics
-    rollback_system
-}
-
-# Set error handler
-trap 'error_handler ${LINENO} "$BASH_COMMAND" $?' ERR
-
-# Cleanup function
-cleanup() {
-    local exit_code=$?
-    if [[ $exit_code -ne 0 ]]; then
-        log "ERROR" "Script failed with exit code $exit_code"
-        rollback_system
-    fi
-}
-
-# Set cleanup handler
-trap cleanup EXIT
-
 # State management
 save_state() {
     echo "$1" > "$STATE_FILE"
@@ -203,7 +117,6 @@ check_system_state() {
         netstat -tulpn | grep :53
         echo "=== End System State Details ==="
     } > "$diag_file"
-    
     return 0
 }
 
@@ -297,27 +210,58 @@ create_backup() {
     log "INFO" "Backup created in $BACKUP_DIR"
 }
 
-# Diagnostic information collection
-collect_diagnostics() {
-    local diag_dir="${DEBUG_DIR}/diagnostics_$(date +%Y-%m-%d_%H%M%S)"
-    mkdir -p "$diag_dir"
+# Rollback system changes
+rollback_system() {
+    log "INFO" "=== Starting System Rollback ==="
+    local state=$(load_state)
     
-    log "INFO" "Collecting diagnostic information..."
+    case "$state" in
+        "installation")
+            log "INFO" "Rolling back DNSCrypt-proxy installation..."
+            systemctl stop dnscrypt-proxy 2>/dev/null || true
+            systemctl disable dnscrypt-proxy 2>/dev/null || true
+            rm -f /etc/systemd/system/dnscrypt-proxy.service
+            systemctl daemon-reload
+            
+            rm -f "$DNSCRYPT_BIN_PATH"
+            rm -rf "/etc/dnscrypt-proxy"
+            rm -rf "$DNSCRYPT_CACHE_DIR"
+            
+            chattr -i /etc/resolv.conf 2>/dev/null || true
+            if [[ -f "$BACKUP_DIR/resolv.conf" ]]; then
+                cp "$BACKUP_DIR/resolv.conf" /etc/resolv.conf
+            fi
+            
+            systemctl enable systemd-resolved 2>/dev/null || true
+            systemctl start systemd-resolved 2>/dev/null || true
+            ;&
+        "backup")
+            log "INFO" "Restoring system configuration..."
+            if [[ -d "$BACKUP_DIR" ]]; then
+                for file in "$BACKUP_DIR"/*; do
+                    if [[ -f "$file" ]]; then
+                        cp -f "$file" "/${file##*/}" 2>/dev/null || true
+                    fi
+                done
+            fi
+            ;&
+        "port_check")
+            log "INFO" "Restoring DNS services..."
+            for service in systemd-resolved named bind9 dnsmasq unbound; do
+                if systemctl is-enabled "$service" &>/dev/null; then
+                    systemctl start "$service" 2>/dev/null || true
+                fi
+            done
+            ;;
+        *)
+            log "WARN" "No state found, performing full rollback..."
+            ;;
+    esac
     
-    {
-        cp -r /etc/dnscrypt-proxy "$diag_dir/" 2>/dev/null || true
-        cp /etc/resolv.conf "$diag_dir/" 2>/dev/null || true
-        systemctl status dnscrypt-proxy > "$diag_dir/service_status.log" 2>/dev/null || true
-        journalctl -u dnscrypt-proxy -n 50 > "$diag_dir/service_journal.log" 2>/dev/null || true
-        ip addr > "$diag_dir/ip_addr.log"
-        netstat -tulpn > "$diag_dir/netstat.log"
-        ps aux | grep -i dns > "$diag_dir/dns_processes.log"
-    }
+    log "INFO" "System rollback completed"
 }
 
 # Install DNSCrypt
-# ... (начало второй части остается таким же до функции install_dnscrypt)
-
 install_dnscrypt() {
     log "INFO" "=== Installing DNSCrypt-proxy ==="
     save_state "installation"
@@ -327,32 +271,22 @@ install_dnscrypt() {
     groupadd -f "$DNSCRYPT_GROUP"
     useradd -r -M -N -g "$DNSCRYPT_GROUP" -s /bin/false "$DNSCRYPT_USER" 2>/dev/null || true
 
-    # Test GitHub connectivity
-    log "INFO" "Testing GitHub connectivity..."
-    if ! curl -s --head https://github.com > /dev/null; then
-        log "ERROR" "Cannot connect to GitHub"
-        return 1
-    fi
-
     # Download and install binary
-     # Download and install binary
     log "INFO" "Downloading DNSCrypt-proxy..."
     cd /tmp
-    rm -f dnscrypt.tar.gz # Очищаем предыдущие загрузки
+    rm -f dnscrypt.tar.gz # Clean previous downloads
     
-    # Прямая ссылка на конкретную версию
     DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
     
     log "INFO" "Using download URL: ${DOWNLOAD_URL}"
     
-    # Пробуем загрузить с помощью curl с подробным выводом
+    # Try download with curl
     log "INFO" "Attempting download with curl..."
     if curl -L -v -o dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
         log "INFO" "Curl download successful"
     else
         log "WARN" "Curl download failed, trying wget..."
         if ! wget --no-check-certificate -v -O dnscrypt.tar.gz "$DOWNLOAD_URL" 2>&1; then
-            # Пробуем альтернативный URL
             DOWNLOAD_URL="https://download.dnscrypt.info/dnscrypt-proxy/v2.1/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
             log "INFO" "Trying alternative URL: ${DOWNLOAD_URL}"
             
@@ -388,6 +322,11 @@ install_dnscrypt() {
         log "ERROR" "Expected binary not found in extracted archive"
         return 1
     fi
+
+    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH" || {
+        log "ERROR" "Failed to copy binary"
+        return 1
+    }
 
     chmod 755 "$DNSCRYPT_BIN_PATH"
     
@@ -548,8 +487,43 @@ main() {
     
     log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
     log "INFO" "Backup Directory: $BACKUP_DIR"
+    log "INFO
+    log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
+    log "INFO" "Backup Directory: $BACKUP_DIR"
     log "INFO" "Installation Log: $LOG_FILE"
+    
+    # Final configuration verification
+    log "INFO" "Performing final checks..."
+    if systemctl is-active --quiet dnscrypt-proxy && \
+       dig +short +timeout=3 google.com @127.0.0.1 >/dev/null; then
+        log "SUCCESS" "DNSCrypt-proxy is running and resolving DNS queries"
+        log "INFO" "Installation completed successfully"
+        return 0
+    else
+        log "ERROR" "Final verification failed"
+        return 1
+    fi
 }
+
+# Error handler
+error_handler() {
+    local line_no=$1
+    local command=$2
+    local exit_code=$3
+    
+    log "ERROR" "Script failed at line $line_no"
+    log "ERROR" "Failed command: $command"
+    log "ERROR" "Exit code: $exit_code"
+    
+    collect_diagnostics
+    rollback_system
+}
+
+# Set error handler
+trap 'error_handler ${LINENO} "$BASH_COMMAND" $?' ERR
+
+# Set cleanup handler
+trap cleanup EXIT
 
 # Start installation
 main
