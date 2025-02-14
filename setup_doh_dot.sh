@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script version
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 # Colors for output
 RED='\033[0;31m'
@@ -19,7 +19,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Backup directory setup
 BACKUP_DIR="/etc/dnscrypt-proxy/backup_$(date +%Y%m%d%H%M%S)"
-REQUIRED_PACKAGES="dnscrypt-proxy ufw"
+REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw")
 
 # Function for logging messages
 log_message() {
@@ -132,7 +132,7 @@ install_packages() {
     apt update
     
     # Install required packages
-    for package in $REQUIRED_PACKAGES; do
+    for package in "${REQUIRED_PACKAGES[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package"; then
             log_message "INFO" "Installing $package..."
             apt install -y "$package"
