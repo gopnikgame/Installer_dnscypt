@@ -532,6 +532,91 @@ cleanup() {
     fi
 }
 
+verify_installation() {
+    log "INFO" "=== Verifying DNSCrypt Installation ==="
+    local issues=0
+
+    # Check if binary exists and is executable
+    if [ ! -x "$DNSCRYPT_BIN_PATH" ]; then
+        log "ERROR" "DNSCrypt binary missing or not executable at $DNSCRYPT_BIN_PATH"
+        issues=$((issues + 1))
+    else
+        # Check binary version
+        local version_output
+        version_output=$("$DNSCRYPT_BIN_PATH" --version 2>&1)
+        if [ $? -ne 0 ]; then
+            log "ERROR" "Failed to get DNSCrypt version"
+            issues=$((issues + 1))
+        else
+            log "INFO" "DNSCrypt version: $version_output"
+        fi
+    fi
+
+    # Check configuration file
+    if [ ! -f "$DNSCRYPT_CONFIG" ]; then
+        log "ERROR" "Configuration file not found at $DNSCRYPT_CONFIG"
+        issues=$((issues + 1))
+    else
+        if [ ! -r "$DNSCRYPT_CONFIG" ]; then
+            log "ERROR" "Configuration file not readable at $DNSCRYPT_CONFIG"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    # Check service status
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        log "ERROR" "DNSCrypt service is not running"
+        systemctl status dnscrypt-proxy >> "$LOG_FILE"
+        issues=$((issues + 1))
+    else
+        log "INFO" "DNSCrypt service is running"
+    fi
+
+    # Check if port 53 is listening
+    if ! ss -lntu | grep -q ':53 '; then
+        log "ERROR" "No service listening on port 53"
+        issues=$((issues + 1))
+    else
+        log "INFO" "Service is listening on port 53"
+    fi
+
+    # Test DNS resolution
+    if ! dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
+        log "ERROR" "DNS resolution test failed for google.com"
+        issues=$((issues + 1))
+    else
+        log "INFO" "DNS resolution test passed"
+    fi
+
+    # Check cache directory
+    if [ ! -d "$DNSCRYPT_CACHE_DIR" ]; then
+        log "ERROR" "Cache directory missing at $DNSCRYPT_CACHE_DIR"
+        issues=$((issues + 1))
+    else
+        if [ ! -w "$DNSCRYPT_CACHE_DIR" ]; then
+            log "ERROR" "Cache directory not writable at $DNSCRYPT_CACHE_DIR"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    # Check resolv.conf
+    if ! grep -q "nameserver 127.0.0.1" /etc/resolv.conf; then
+        log "ERROR" "resolv.conf not configured correctly"
+        issues=$((issues + 1))
+    else
+        log "INFO" "resolv.conf configured correctly"
+    fi
+
+    # Final verdict
+    if [ $issues -eq 0 ]; then
+        log "INFO" "All verification checks passed successfully"
+        return 0
+    else
+        log "ERROR" "Verification failed with $issues issue(s)"
+        return 1
+    fi
+}
+
 # Main installation process
 main() {
     log "INFO" "Starting DNSCrypt-proxy installation (Version: $VERSION)"
