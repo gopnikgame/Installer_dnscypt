@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.12"
+VERSION="2.0.13"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -61,7 +61,7 @@ check_system() {
     exit 1
   fi
   
-  local required_commands=("dig" "ss" "ufw" "systemctl")
+  local required_commands=("dig" "ss" "ufw" "systemctl" "chattr")
   for cmd in "${required_commands[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
       log "ERROR" "Required command not found: $cmd"
@@ -131,6 +131,13 @@ configure_resolver() {
   
   log "INFO" "Creating static resolv.conf..."
   
+  # Remove immutable attribute if present
+  if chattr -i /etc/resolv.conf 2>/dev/null; then
+    log "INFO" "Removed immutable attribute from /etc/resolv.conf"
+  else
+    log "DEBUG" "No immutable attribute found on /etc/resolv.conf"
+  fi
+  
   # Check if /etc/resolv.conf is a symbolic link
   if [[ -L "/etc/resolv.conf" ]]; then
     log "INFO" "/etc/resolv.conf is a symbolic link. Removing it..."
@@ -141,9 +148,6 @@ configure_resolver() {
     rm -f /etc/resolv.conf
   fi
   
-  # Remove immutable attribute if present
-  chattr -i /etc/resolv.conf 2>/dev/null || true
-  
   # Create the new static resolv.conf
   cat > /etc/resolv.conf << 'EOL'
 nameserver 127.0.0.53
@@ -152,7 +156,11 @@ search .
 EOL
   
   # Set immutable attribute to prevent accidental modification
-  chattr +i /etc/resolv.conf 2>/dev/null || true
+  if chattr +i /etc/resolv.conf 2>/dev/null; then
+    log "INFO" "Set immutable attribute on /etc/resolv.conf"
+  else
+    log "WARN" "Failed to set immutable attribute on /etc/resolv.conf"
+  fi
   
   log "INFO" "Static resolv.conf created."
 }
