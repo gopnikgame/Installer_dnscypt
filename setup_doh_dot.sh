@@ -321,9 +321,21 @@ install_dnscrypt() {
     # Download and install binary
     log "INFO" "Downloading DNSCrypt-proxy..."
     cd /tmp
-    wget -q "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_LATEST_VERSION}/dnscrypt-proxy-linux-x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz" -O dnscrypt.tar.gz
-    tar xzf dnscrypt.tar.gz
-    cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"
+    if ! wget -q "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${DNSCRYPT_LATEST_VERSION}/dnscrypt-proxy-linux-x86_64-${DNSCRYPT_LATEST_VERSION}.tar.gz" -O dnscrypt.tar.gz; then
+        log "ERROR" "Failed to download DNSCrypt-proxy"
+        return 1
+    fi
+
+    if ! tar xzf dnscrypt.tar.gz; then
+        log "ERROR" "Failed to extract DNSCrypt-proxy"
+        return 1
+    fi
+
+    if ! cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"; then
+        log "ERROR" "Failed to copy DNSCrypt-proxy binary"
+        return 1
+    fi
+
     chmod 755 "$DNSCRYPT_BIN_PATH"
     
     # Create directories and set permissions
@@ -398,20 +410,41 @@ EOL
     systemctl disable systemd-resolved || true
     systemctl stop systemd-resolved || true
     
+    # Make sure port 53 is free
+    sleep 2
+    if ss -lptn 'sport = :53' 2>/dev/null | grep -q ":53"; then
+        log "ERROR" "Port 53 is still in use"
+        return 1
+    fi
+    
     rm -f /etc/resolv.conf
     echo "nameserver 127.0.0.1" > /etc/resolv.conf
     chattr +i /etc/resolv.conf
 
-    # Start service
+    # Start service with additional checks
     log "INFO" "Starting DNSCrypt-proxy service..."
     systemctl daemon-reload
     systemctl enable dnscrypt-proxy
-    systemctl start dnscrypt-proxy
     
-    # Wait for service to start
-    sleep 5
+    if ! systemctl start dnscrypt-proxy; then
+        log "ERROR" "Failed to start DNSCrypt-proxy service"
+        journalctl -u dnscrypt-proxy --no-pager -n 50 >> "$LOG_FILE"
+        return 1
+    fi
     
-    log "INFO" "DNSCrypt-proxy installation completed"
+    # Wait and verify service is running
+    for i in {1..10}; do
+        if systemctl is-active --quiet dnscrypt-proxy; then
+            log "INFO" "DNSCrypt-proxy service is running"
+            sleep 2
+            return 0
+        fi
+        log "INFO" "Waiting for service to start (attempt $i/10)..."
+        sleep 2
+    done
+
+    log "ERROR" "DNSCrypt-proxy service failed to start within timeout"
+    return 1
 }
 
 # Installation verification
