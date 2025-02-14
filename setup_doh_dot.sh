@@ -143,14 +143,29 @@ EOL
 install_dependencies() {
   log "INFO" "=== Installing Dependencies ==="
   
+  # Add PPA for the latest version of dnscrypt-proxy
+  if grep -qiE 'ubuntu|debian' /etc/os-release; then
+    add-apt-repository ppa:savoury1/dnscrypt-proxy -y
+  else
+    log "ERROR" "Unsupported OS detected. Please install dnscrypt-proxy manually."
+    exit 1
+  fi
+  
   apt-get update
   apt-get install -y "${REQUIRED_PACKAGES[@]}"
   
+  # Check installed version
   local installed_version=$(dnscrypt-proxy --version | awk '{print $2}' | cut -d'-' -f1)
   if dpkg --compare-versions "$installed_version" lt "$MIN_DNSCRYPT_VERSION"; then
     log "ERROR" "DNSCrypt-proxy version $MIN_DNSCRYPT_VERSION or higher required"
     exit 1
   fi
+  
+  # Set capabilities for binding to privileged ports
+  if ! command -v setcap &> /dev/null; then
+    apt-get install -y libcap2-bin
+  fi
+  setcap cap_net_bind_service=+ep $(which dnscrypt-proxy)
 }
 
 # Main DNSCrypt configuration
