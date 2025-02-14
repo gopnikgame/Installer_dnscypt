@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.7"
+VERSION="2.0.8"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -163,11 +163,17 @@ install_dependencies() {
   log "INFO" "Extracting dnscrypt-proxy archive..."
   tar -xzf dnscrypt-proxy.tar.gz
   
+  # Log the contents of the extracted directory for debugging
+  log "DEBUG" "Contents of the extracted directory:"
+  find . -type f | while read -r file; do
+    log "DEBUG" "Found file: $file"
+  done
+  
   # Find the binary file using 'find'
   local binary_path=$(find . -type f -name "dnscrypt-proxy" -print -quit)
   
   if [[ -z "$binary_path" ]]; then
-    log "ERROR" "Failed to locate the dnscrypt-proxy binary in the archive"
+    log "ERROR" "Failed to locate the dnscrypt-proxy binary in the archive. Please check the archive structure."
     exit 1
   fi
   
