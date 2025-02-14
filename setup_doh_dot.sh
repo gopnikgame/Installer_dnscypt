@@ -274,9 +274,10 @@ install_dnscrypt() {
     cd /tmp
     rm -f dnscrypt.tar.gz # Clean previous downloads
     
-    DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
-    ALTERNATIVE_URL="https://download.dnscrypt.info/dnscrypt-proxy/v2.1/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
-    BINARY_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.7/dnscrypt-proxy-linux_x86_64"
+    # Исправленные URL'ы
+    DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
+    ALTERNATIVE_URL="https://download.dnscrypt.info/dnscrypt-proxy/2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
+    BINARY_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.7/dnscrypt-proxy-linux_x86_64"
     
     log "INFO" "Using primary download URL: ${DOWNLOAD_URL}"
     
