@@ -186,9 +186,153 @@ install_packages() {
     done
 }
 # Function to configure DNSCrypt
-Feb 14 08:49:05 gmjiegnrqk dnscrypt-proxy[12881]: listen udp 127.0.0.53:53: bind: permission denied
-Feb 14 08:49:05 gmjiegnrqk systemd[1]: dnscrypt-proxy.service: Main process exited, code=exited, status=255/EXCEPTION
-Feb 14 08:49:05 gmjiegnrqk systemd[1]: dnscrypt-proxy.service: Failed with result 'exit-code'.
+configure_dnscrypt() {
+    log_message "INFO" "=== Configuring DNSCrypt-Proxy ==="
+    
+    # First, check if port 53 is in use
+    if ss -tulpn | grep ':53 '; then
+        log_message "INFO" "Port 53 is currently in use. Stopping conflicting services..."
+        # Stop all potentially conflicting services
+        systemctl stop systemd-resolved || true
+        systemctl stop named || true
+        systemctl stop bind9 || true
+        sleep 2
+    fi
+
+    # Stop all related services
+    systemctl stop dnscrypt-proxy.socket || true
+    systemctl stop dnscrypt-proxy.service || true
+    
+    # Disable socket activation
+    systemctl disable dnscrypt-proxy.socket || true
+    systemctl disable dnscrypt-proxy.service || true
+    
+    # Get correct user and group for dnscrypt-proxy
+    DNSCRYPT_USER="dnscrypt-proxy"
+    DNSCRYPT_GROUP="dnscrypt-proxy"
+    
+    # Create group if it doesn't exist
+    if ! getent group "$DNSCRYPT_GROUP" >/dev/null; then
+        groupadd -r "$DNSCRYPT_GROUP"
+    fi
+    
+    # Create user if it doesn't exist
+    if ! id "$DNSCRYPT_USER" >/dev/null 2>&1; then
+        useradd -r -g "$DNSCRYPT_GROUP" -s /bin/false -d /var/cache/dnscrypt-proxy "$DNSCRYPT_USER"
+    fi
+
+    log_message "INFO" "Using user:group = $DNSCRYPT_USER:$DNSCRYPT_GROUP"
+
+    # Create required directories
+    mkdir -p /var/log/dnscrypt-proxy
+    mkdir -p /var/cache/dnscrypt-proxy
+    mkdir -p /etc/dnscrypt-proxy
+    
+    # Set correct ownership and permissions
+    chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" /var/log/dnscrypt-proxy
+    chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" /var/cache/dnscrypt-proxy
+    chmod 755 /var/log/dnscrypt-proxy
+    chmod 755 /var/cache/dnscrypt-proxy
+
+    # Configure systemd-resolved first
+    cat > /etc/systemd/resolved.conf << 'EOL'
+[Resolve]
+DNS=127.0.0.53
+FallbackDNS=1.1.1.1 8.8.8.8
+DNSStubListener=no
+Cache=yes
+DNSOverTLS=no
+DNSSEC=false
+EOL
+
+    # Create dnscrypt-proxy configuration
+    cat > /etc/dnscrypt-proxy/dnscrypt-proxy.toml << 'EOL'
+listen_addresses = ['127.0.0.53:53']
+server_names = ['cloudflare', 'google']
+fallback_resolvers = ['1.1.1.1:53', '8.8.8.8:53']
+max_clients = 250
+ipv4_servers = true
+ipv6_servers = false
+dnscrypt_servers = true
+doh_servers = true
+require_dnssec = false
+require_nolog = true
+require_nofilter = true
+force_tcp = false
+timeout = 2500
+keepalive = 30
+log_level = 2
+use_syslog = true
+cache = true
+cache_size = 4096
+cache_min_ttl = 600
+cache_max_ttl = 86400
+cache_neg_min_ttl = 60
+cache_neg_max_ttl = 600
+
+[sources]
+  [sources.'public-resolvers']
+    urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md', 'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md']
+    cache_file = '/var/cache/dnscrypt-proxy/public-resolvers.md'
+    minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
+    refresh_delay = 72
+    prefix = ''
+EOL
+
+    # Ensure correct permissions for configuration files
+    chown -R root:root /etc/dnscrypt-proxy
+    chmod 644 /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+
+    # Create and configure systemd service override
+    mkdir -p /etc/systemd/system/dnscrypt-proxy.service.d
+    cat > /etc/systemd/system/dnscrypt-proxy.service.d/override.conf << EOL
+[Service]
+User=$DNSCRYPT_USER
+Group=$DNSCRYPT_GROUP
+RuntimeDirectory=dnscrypt-proxy
+RuntimeDirectoryMode=0755
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+EOL
+
+    # Create correct resolv.conf
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    cat > /etc/resolv.conf << 'EOL'
+nameserver 127.0.0.53
+options edns0
+EOL
+
+    # Lock resolv.conf to prevent changes
+    chattr +i /etc/resolv.conf
+
+    # Reload systemd and restart services
+    systemctl daemon-reload
+    
+    # Start services in correct order
+    systemctl restart systemd-resolved
+    sleep 2
+    
+    # Enable and start dnscrypt-proxy
+    systemctl enable dnscrypt-proxy
+    systemctl start dnscrypt-proxy
+    sleep 2
+
+    # Verify service status
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        log_message "ERROR" "DNSCrypt-proxy failed to start"
+        systemctl status dnscrypt-proxy
+        return 1
+    fi
+
+    # Double check port binding
+    if ! ss -tulpn | grep '127.0.0.53:53'; then
+        log_message "ERROR" "DNSCrypt-proxy is not bound to port 53"
+        return 1
+    fi
+
+    log_message "INFO" "DNSCrypt-proxy configuration completed successfully"
+}
 
 # Function to verify installation with timeout
 verify_installation() {
