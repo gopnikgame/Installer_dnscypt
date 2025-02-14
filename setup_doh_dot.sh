@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.14"
+VERSION="2.0.15"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -119,15 +119,47 @@ configure_firewall() {
   ufw status verbose | tee "$BACKUP_DIR/ufw_status.after"
 }
 
+# Stop and disable systemd-resolved
+disable_systemd_resolved() {
+  log "INFO" "Stopping and disabling systemd-resolved..."
+  
+  # Check if systemd-resolved is active
+  if systemctl is-active --quiet systemd-resolved; then
+    log "INFO" "Systemd-resolved is running. Stopping it..."
+    systemctl stop systemd-resolved
+  fi
+  
+  # Disable systemd-resolved
+  if systemctl list-unit-files | grep -q systemd-resolved; then
+    log "INFO" "Disabling systemd-resolved..."
+    systemctl disable systemd-resolved
+  fi
+  
+  # Remove the resolved stub listener
+  log "INFO" "Removing systemd-resolved stub listener configuration..."
+  if [[ -f "/etc/resolv.conf" ]]; then
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    unlink /etc/resolv.conf || rm -f /etc/resolv.conf
+  fi
+  
+  if [[ -f "/etc/systemd/resolved.conf" ]]; then
+    log "INFO" "Backing up and modifying /etc/systemd/resolved.conf..."
+    cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.bak
+    sed -i 's/^DNSStubListener=.*/DNSStubListener=no/' /etc/systemd/resolved.conf
+  fi
+  
+  log "INFO" "Restarting systemd to apply changes..."
+  systemctl daemon-reload
+  systemctl restart systemd-networkd || true
+  
+  log "INFO" "Systemd-resolved has been disabled."
+}
+
 # DNS resolver configuration
 configure_resolver() {
   log "INFO" "=== Configuring DNS Resolver ==="
   
-  if systemctl list-unit-files | grep -q systemd-resolved; then
-    log "INFO" "Stopping and disabling systemd-resolved..."
-    systemctl stop systemd-resolved
-    systemctl disable systemd-resolved
-  fi
+  disable_systemd_resolved
   
   log "INFO" "Creating static resolv.conf..."
   
@@ -136,16 +168,6 @@ configure_resolver() {
     log "INFO" "Removed immutable attribute from /etc/resolv.conf"
   else
     log "DEBUG" "No immutable attribute found on /etc/resolv.conf"
-  fi
-  
-  # Check if /etc/resolv.conf is a symbolic link
-  if [[ -L "/etc/resolv.conf" ]]; then
-    log "INFO" "/etc/resolv.conf is a symbolic link. Removing it..."
-    unlink /etc/resolv.conf || true
-  elif [[ -f "/etc/resolv.conf" ]]; then
-    log "INFO" "/etc/resolv.conf is a regular file. Backing it up..."
-    cp /etc/resolv.conf /etc/resolv.conf.bak
-    rm -f /etc/resolv.conf
   fi
   
   # Create the new static resolv.conf
@@ -364,23 +386,11 @@ rollback_system() {
   exit 1
 }
 
-# Check if port 53 is already in use
-check_port_53() {
-  log "INFO" "Checking if port 53 is already in use..."
-  if ss -tuln | grep -q ':53 '; then
-    log "ERROR" "Port 53 is already in use by another process."
-    ss -tuln | grep ':53 '
-    exit 1
-  fi
-  log "INFO" "Port 53 is available."
-}
-
 # Main installation process
 main() {
   trap rollback_system ERR
   check_root
   check_system
-  check_port_53
   install_dependencies
   create_backup
   configure_resolver
