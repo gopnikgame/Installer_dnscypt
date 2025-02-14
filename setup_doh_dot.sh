@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.9"
+VERSION="2.0.10"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -193,11 +193,21 @@ install_dependencies() {
     exit 1
   fi
   
-  local installed_version=$("$DNSCRYPT_BIN_PATH" --version | awk '{print $2}' | cut -d'-' -f1)
+  # Get the installed version
+  local installed_version_output=$("$DNSCRYPT_BIN_PATH" --version 2>&1)
+  local installed_version=$(echo "$installed_version_output" | awk '{print $2}' | cut -d'-' -f1)
+  
+  if [[ -z "$installed_version" ]]; then
+    log "ERROR" "Failed to determine the installed version of dnscrypt-proxy. Output: $installed_version_output"
+    exit 1
+  fi
+  
   if dpkg --compare-versions "$installed_version" lt "$MIN_DNSCRYPT_VERSION"; then
     log "ERROR" "DNSCrypt-proxy version $MIN_DNSCRYPT_VERSION or higher required. Installed version: $installed_version"
     exit 1
   fi
+  
+  log "INFO" "Installed DNSCrypt-proxy version: $installed_version"
   
   # Set capabilities for binding to privileged ports
   if ! command -v setcap &> /dev/null; then
