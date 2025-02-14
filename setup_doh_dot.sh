@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.2"
+VERSION="2.0.3"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -21,13 +21,14 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Configuration
 BACKUP_DIR="/var/backups/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"
-REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw" "dnsutils" "iproute2")
+REQUIRED_PACKAGES=("ufw" "dnsutils" "iproute2")
 MIN_DNSCRYPT_VERSION="2.1.0"
 
 # Service configuration
 DNSCRYPT_USER="dnscrypt-proxy"
 DNSCRYPT_GROUP="dnscrypt-proxy"
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+DNSCRYPT_BIN_PATH="/usr/local/bin/dnscrypt-proxy"
 
 # Function for logging
 log() {
@@ -143,19 +144,34 @@ EOL
 install_dependencies() {
   log "INFO" "=== Installing Dependencies ==="
   
-  # Add PPA for the latest version of dnscrypt-proxy
-  if grep -qiE 'ubuntu|debian' /etc/os-release; then
-    add-apt-repository ppa:savoury1/dnscrypt-proxy -y
-  else
-    log "ERROR" "Unsupported OS detected. Please install dnscrypt-proxy manually."
-    exit 1
-  fi
-  
   apt-get update
   apt-get install -y "${REQUIRED_PACKAGES[@]}"
   
+  # Download and install the latest dnscrypt-proxy binary
+  local latest_release_url="https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest"
+  local download_url=$(curl -s "$latest_release_url" | grep "browser_download_url.*linux_x86_64.tar.gz" | cut -d '"' -f 4)
+  
+  if [[ -z "$download_url" ]]; then
+    log "ERROR" "Failed to find the latest dnscrypt-proxy release for Linux x86_64"
+    exit 1
+  fi
+  
+  log "INFO" "Downloading dnscrypt-proxy from $download_url..."
+  local temp_dir=$(mktemp -d)
+  pushd "$temp_dir" >/dev/null
+  curl -fsSL -o dnscrypt-proxy.tar.gz "$download_url"
+  tar -xzf dnscrypt-proxy.tar.gz
+  
+  # Install the binary
+  mv dnscrypt-proxy*/dnscrypt-proxy "$DNSCRYPT_BIN_PATH"
+  chmod +x "$DNSCRYPT_BIN_PATH"
+  
+  # Clean up
+  popd >/dev/null
+  rm -rf "$temp_dir"
+  
   # Check installed version
-  local installed_version=$(dnscrypt-proxy --version | awk '{print $2}' | cut -d'-' -f1)
+  local installed_version=$("$DNSCRYPT_BIN_PATH" --version | awk '{print $2}' | cut -d'-' -f1)
   if dpkg --compare-versions "$installed_version" lt "$MIN_DNSCRYPT_VERSION"; then
     log "ERROR" "DNSCrypt-proxy version $MIN_DNSCRYPT_VERSION or higher required"
     exit 1
@@ -165,7 +181,7 @@ install_dependencies() {
   if ! command -v setcap &> /dev/null; then
     apt-get install -y libcap2-bin
   fi
-  setcap cap_net_bind_service=+ep $(which dnscrypt-proxy)
+  setcap cap_net_bind_service=+ep "$DNSCRYPT_BIN_PATH"
 }
 
 # Main DNSCrypt configuration
@@ -178,6 +194,7 @@ configure_dnscrypt() {
   fi
   
   log "INFO" "Generating DNSCrypt-proxy configuration..."
+  mkdir -p /etc/dnscrypt-proxy
   cat > "$DNSCRYPT_CONFIG" << 'EOL'
 server_names = ['cloudflare', 'quad9-doh-ip4-filter-pri']
 listen_addresses = ['127.0.0.53:53']
