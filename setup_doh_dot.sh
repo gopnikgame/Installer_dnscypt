@@ -4,8 +4,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Script version
-VERSION="1.2.3"
+# Script version and metadata
+VERSION="1.2.4"
+SCRIPT_START_TIME="2025-02-14 08:20:30"
+CURRENT_USER="gopnikgame"
 
 # Colors for output
 RED='\033[0;31m'
@@ -14,11 +16,11 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Logging setup
-LOG_FILE="/tmp/dnscrypt_setup.log"
+LOG_FILE="/tmp/dnscrypt_setup_${SCRIPT_START_TIME//[ :]/-}.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Backup directory setup
-BACKUP_DIR="/etc/dnscrypt-proxy/backup_$(date +%Y%m%d%H%M%S)"
+BACKUP_DIR="/etc/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[ :]/-}"
 REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw")
 
 # Function for logging messages
@@ -61,6 +63,11 @@ check_system() {
             exit 1
         fi
     done
+
+    # Log system information
+    log_message "INFO" "Script started by user: $CURRENT_USER"
+    log_message "INFO" "System: $(uname -a)"
+    log_message "INFO" "Distribution: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
 }
 
 # Function to create backup directory and backup files
@@ -86,6 +93,10 @@ create_backups() {
 
     # Backup current UFW rules
     ufw status numbered > "${BACKUP_DIR}/ufw_rules.backup"
+    
+    # Save system DNS settings
+    echo "Original DNS Settings ($(date))" > "${BACKUP_DIR}/dns_settings.original"
+    resolvectl status >> "${BACKUP_DIR}/dns_settings.original"
 }
 
 # Enhanced UFW management function with SSH protection
@@ -181,6 +192,23 @@ configure_dnscrypt() {
     
     # Stop services before configuration
     systemctl stop dnscrypt-proxy 2>/dev/null || true
+
+    # Get correct user and group for dnscrypt-proxy
+    local DNSCRYPT_USER=$(getent passwd | grep dnscrypt-proxy | cut -d: -f1)
+    local DNSCRYPT_GROUP=$(getent group | grep dnscrypt-proxy | cut -d: -f1)
+
+    if [ -z "$DNSCRYPT_USER" ] || [ -z "$DNSCRYPT_GROUP" ]; then
+        log_message "INFO" "DNSCrypt user/group not found, using system defaults"
+        DNSCRYPT_USER="dnscrypt-proxy"
+        DNSCRYPT_GROUP="dnscrypt-proxy"
+        # Create user and group if they don't exist
+        if ! getent group "$DNSCRYPT_GROUP" >/dev/null; then
+            groupadd -r "$DNSCRYPT_GROUP"
+        fi
+        if ! getent passwd "$DNSCRYPT_USER" >/dev/null; then
+            useradd -r -g "$DNSCRYPT_GROUP" -s /bin/false -d /var/cache/dnscrypt-proxy "$DNSCRYPT_USER"
+        fi
+    fi
     
     # Create main configuration
     cat > /etc/dnscrypt-proxy/dnscrypt-proxy.toml << 'EOL'
@@ -224,9 +252,15 @@ cache_neg_max_ttl = 600
     prefix = ''
 EOL
 
-    # Create log directory
+    # Create required directories
     mkdir -p /var/log/dnscrypt-proxy
-    chown -R _dnscrypt-proxy:_dnscrypt-proxy /var/log/dnscrypt-proxy
+    mkdir -p /var/cache/dnscrypt-proxy
+
+    # Set correct ownership and permissions
+    chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" /var/log/dnscrypt-proxy
+    chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" /var/cache/dnscrypt-proxy
+    chmod 755 /var/log/dnscrypt-proxy
+    chmod 755 /var/cache/dnscrypt-proxy
 
     # Configure systemd-resolved with safe defaults
     cat > /etc/systemd/resolved.conf << 'EOL'
@@ -239,7 +273,7 @@ DNSOverTLS=no
 DNSSEC=false
 EOL
 
-    # Ensure correct permissions
+    # Ensure correct permissions for configuration files
     chown -R root:root /etc/dnscrypt-proxy
     chmod 644 /etc/dnscrypt-proxy/dnscrypt-proxy.toml
     
@@ -339,6 +373,7 @@ EOL
 # Main installation process
 main() {
     log_message "INFO" "Starting DNSCrypt installation script v${VERSION}"
+    log_message "INFO" "Started by user: ${CURRENT_USER} at ${SCRIPT_START_TIME}"
     
     # Create trap for cleanup on script failure
     trap rollback ERR
@@ -374,20 +409,4 @@ main() {
         show_dns_settings "${BACKUP_DIR}/post_install_settings.txt"
         
         # Final summary
-        log_message "INFO" "=== Installation Summary ==="
-        echo -e "${GREEN}Installation completed successfully!${NC}"
-        echo -e "- Configuration files backed up to: ${BACKUP_DIR}"
-        echo -e "- Log file location: ${LOG_FILE}"
-        echo -e "- DNSCrypt-proxy service is running"
-        echo -e "- DNS resolution is working"
-        echo -e "- SSH access is preserved"
-        echo -e "\nTo monitor the service: ${YELLOW}systemctl status dnscrypt-proxy${NC}"
-        echo -e "To view logs: ${YELLOW}journalctl -u dnscrypt-proxy${NC}"
-    else
-        log_message "ERROR" "Installation verification failed"
-        rollback
-    fi
-}
-
-# Execute main function
-main
+        log
