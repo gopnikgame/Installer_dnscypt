@@ -5,7 +5,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script metadata
-VERSION="2.0.1"
+VERSION="2.0.2"
 SCRIPT_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 CURRENT_USER=$(whoami)
 
@@ -20,7 +20,7 @@ LOG_FILE="/var/log/dnscrypt_install_${SCRIPT_START_TIME//[: -]/_}.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Configuration
-BACKUP_DIR="/var/backups/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"  # Изменено
+BACKUP_DIR="/var/backups/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"
 REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw" "dnsutils" "iproute2")
 MIN_DNSCRYPT_VERSION="2.1.0"
 
@@ -123,10 +123,12 @@ configure_resolver() {
   log "INFO" "=== Configuring DNS Resolver ==="
   
   if systemctl list-unit-files | grep -q systemd-resolved; then
+    log "INFO" "Stopping and disabling systemd-resolved..."
     systemctl stop systemd-resolved
     systemctl disable systemd-resolved
   fi
 
+  log "INFO" "Creating static resolv.conf..."
   rm -f /etc/resolv.conf
   cat > /etc/resolv.conf << 'EOL'
 nameserver 127.0.0.53
@@ -156,9 +158,11 @@ configure_dnscrypt() {
   log "INFO" "=== Configuring DNSCrypt-proxy ==="
   
   if ! id "$DNSCRYPT_USER" &> /dev/null; then
+    log "INFO" "Creating DNSCrypt-proxy user..."
     useradd -r -d /var/empty -s /bin/false "$DNSCRYPT_USER"
   fi
 
+  log "INFO" "Generating DNSCrypt-proxy configuration..."
   cat > "$DNSCRYPT_CONFIG" << 'EOL'
 server_names = ['cloudflare', 'quad9-doh-ip4-filter-pri']
 
@@ -188,8 +192,12 @@ EOL
   chown -R "$DNSCRYPT_USER":"$DNSCRYPT_GROUP" /etc/dnscrypt-proxy
   chmod 644 "$DNSCRYPT_CONFIG"
 
+  log "INFO" "Enabling and starting DNSCrypt-proxy service..."
   systemctl enable dnscrypt-proxy
   systemctl restart dnscrypt-proxy
+
+  # Wait for the service to start
+  sleep 5
 }
 
 # Installation verification
@@ -228,16 +236,19 @@ rollback_system() {
   log "ERROR" "=== INSTALLATION FAILED - INITIATING ROLLBACK ==="
   
   if [ -f "$BACKUP_DIR/ufw_rules.original" ]; then
+    log "INFO" "Restoring UFW rules..."
     ufw --force reset
     ufw --force import "$BACKUP_DIR/ufw_rules.original"
     ufw --force enable
   fi
 
+  log "INFO" "Restoring original resolver configuration..."
   chattr -i /etc/resolv.conf 2>/dev/null || true
   if [ -f "$BACKUP_DIR/etc/resolv.conf" ]; then
     cp -f "$BACKUP_DIR/etc/resolv.conf" /etc/resolv.conf
   fi
 
+  log "INFO" "Restarting systemd-resolved..."
   systemctl restart systemd-resolved
 
   log "ERROR" "Rollback completed. System should be in original state."
