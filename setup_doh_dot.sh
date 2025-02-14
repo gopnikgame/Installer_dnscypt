@@ -438,23 +438,66 @@ main() {
     log "INFO" "Script start time: $SCRIPT_START_TIME"
     log "INFO" "Current user: $CURRENT_USER"
     
-    check_root
-    check_prerequisites || exit 1
-    check_system_state
-    check_port_53 || exit 1
-    create_backup
+    # Add sleep to ensure logs are written
+    sleep 1
     
-    install_dnscrypt || exit 1
+    if ! check_root; then
+        log "ERROR" "Root check failed"
+        exit 1
+    fi
+    sleep 1
     
-    if verify_installation; then
-        log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
-        log "INFO" "Backup Directory: $BACKUP_DIR"
-        log "INFO" "Installation Log: $LOG_FILE"
-        exit 0
-    else
-        log "ERROR" "Installation failed, initiating rollback..."
+    if ! check_prerequisites; then
+        log "ERROR" "Prerequisites check failed"
+        exit 1
+    fi
+    sleep 1
+    
+    if ! check_system_state; then
+        log "ERROR" "System state check failed"
+        exit 1
+    fi
+    sleep 1
+    
+    if ! check_port_53; then
+        log "ERROR" "Port 53 check failed"
+        exit 1
+    fi
+    sleep 1
+    
+    if ! create_backup; then
+        log "ERROR" "Backup creation failed"
+        exit 1
+    fi
+    sleep 1
+    
+    log "INFO" "Starting DNSCrypt installation..."
+    if ! install_dnscrypt; then
+        log "ERROR" "DNSCrypt installation failed"
         rollback_system
         exit 1
+    fi
+    sleep 1
+    
+    log "INFO" "Verifying installation..."
+    if ! verify_installation; then
+        log "ERROR" "Installation verification failed"
+        rollback_system
+        exit 1
+    fi
+    
+    log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
+    log "INFO" "Backup Directory: $BACKUP_DIR"
+    log "INFO" "Installation Log: $LOG_FILE"
+    
+    # Final verification
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        log "SUCCESS" "DNSCrypt-proxy service is running"
+        return 0
+    else
+        log "ERROR" "Final verification failed"
+        rollback_system
+        return 1
     fi
 }
 
