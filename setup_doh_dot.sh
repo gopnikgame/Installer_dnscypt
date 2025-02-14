@@ -5,8 +5,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Script version and metadata
-VERSION="1.2.5"
-SCRIPT_START_TIME="2025-02-14 08:33:10"
+VERSION="1.2.6"
+SCRIPT_START_TIME="2025-02-14 08:59:33"
 CURRENT_USER="gopnikgame"
 
 # Colors for output
@@ -93,7 +93,7 @@ create_backups() {
 
     # Backup current UFW rules and DNS settings
     ufw status numbered > "${BACKUP_DIR}/ufw_rules.backup"
-    resolvectl status > "${BACKUP_DIR}/dns_settings.original"
+    resolvectl status > "${BACKUP_DIR}/dns_settings.original" 2>/dev/null || true
 }
 
 # Enhanced UFW management function with SSH protection
@@ -352,7 +352,7 @@ verify_installation() {
     fi
     
     # Check port 53 binding
-    if ! ss -tulpn | grep -q "127.0.0.53:53"; then
+    if ! ss -tulpn | grep '127.0.0.53:53'; then
         log_message "ERROR" "Port 53 is not properly bound to 127.0.0.53"
         ss -tulpn | grep ":53" || true
         verification_failed=1
