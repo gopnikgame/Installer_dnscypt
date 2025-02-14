@@ -20,7 +20,7 @@ LOG_FILE="/var/log/dnscrypt_install_${SCRIPT_START_TIME//[: -]/_}.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Configuration
-BACKUP_DIR="/etc/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"
+BACKUP_DIR="/var/backups/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"  # Изменено
 REQUIRED_PACKAGES=("dnscrypt-proxy" "ufw" "dnsutils" "iproute2")
 MIN_DNSCRYPT_VERSION="2.1.0"
 
