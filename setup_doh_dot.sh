@@ -461,5 +461,11 @@ main() {
     fi
 }
 
+# Parse command line arguments and run main
+if [[ "${1:-}" == "--debug" ]]; then
+    DEBUG_MODE=1
+    log "INFO" "Debug mode enabled"
+fi
+
 # Start installation
 main
