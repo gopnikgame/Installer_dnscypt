@@ -1,149 +1,73 @@
 #!/bin/bash
 
-# Enable strict error checking and prevent unset variable usage
-set -euo pipefail
-IFS=$'\n\t'
-
-# Script metadata
-VERSION="2.0.17"
-SCRIPT_START_TIME="2025-02-14 19:43:20"
+# Metadata
+VERSION="2.0.18"
+SCRIPT_START_TIME="2025-02-15 20:12:14"
 CURRENT_USER="gopnikgame"
 
-# Colors for output with enhanced visibility
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-# Debug mode flag (disabled by default)
-DEBUG_MODE=0
-
-# Enhanced logging setup with rotation and debug
-LOG_DIR="/var/log/dnscrypt"
-DEBUG_DIR="${LOG_DIR}/debug"
-LOG_FILE="${LOG_DIR}/dnscrypt_install_${SCRIPT_START_TIME//[: -]/_}.log"
-DEBUG_FILE="${DEBUG_DIR}/dnscrypt_debug_${SCRIPT_START_TIME//[: -]/_}.log"
-
-# Create log directories
-mkdir -p "$LOG_DIR" "$DEBUG_DIR"
-touch "$LOG_FILE" "$DEBUG_FILE"
-chmod 640 "$LOG_FILE" "$DEBUG_FILE"
-
-# Configuration
-BACKUP_DIR="/var/backups/dnscrypt-proxy/backup_${SCRIPT_START_TIME//[: -]/_}"
-REQUIRED_PACKAGES=(
-    "ufw"
-    "dnsutils"
-    "iproute2"
-    "curl"
-    "libcap2-bin"
-    "tar"
-    "wget"
-    "bc"
-)
-MIN_DNSCRYPT_VERSION="2.1.0"
-DNSCRYPT_LATEST_VERSION="2.1.7"
-
-# Service configuration
-DNSCRYPT_USER="dnscrypt-proxy"
-DNSCRYPT_GROUP="dnscrypt-proxy"
-DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+# Constants
+DNSCRYPT_USER="dnscrypt"
+DNSCRYPT_GROUP="dnscrypt"
 DNSCRYPT_BIN_PATH="/usr/local/bin/dnscrypt-proxy"
+DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
 DNSCRYPT_CACHE_DIR="/var/cache/dnscrypt-proxy"
-STATE_FILE="/tmp/dnscrypt_install_state_$(date +%Y%m%d_%H%M%S)"
+BACKUP_DIR="/var/backup/dns_$(date +%Y%m%d_%H%M%S)"
+DEBUG_DIR="/var/log/dnscrypt"
+LOG_FILE="${DEBUG_DIR}/install_$(date +%Y%m%d_%H%M%S).log"
+STATE_FILE="/tmp/dnscrypt_install_state"
 
-# Basic functions
+# Create debug directory
+mkdir -p "$DEBUG_DIR"
+touch "$LOG_FILE"
+chmod 644 "$LOG_FILE"
+
+# Logging function
 log() {
     local level="$1"
-    local msg="$2"
-    local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    local line_no="${BASH_LINENO[0]}"
-    local func="${FUNCNAME[1]:-main}"
-    local log_msg="${timestamp} [${level}] (${func}:${line_no}) ${msg}"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local caller_info=""
     
+    # Get caller information
+    if [ "$level" = "DEBUG" ] || [ "$level" = "ERROR" ]; then
+        local caller_function="${FUNCNAME[1]}"
+        local caller_line="${BASH_LINENO[0]}"
+        caller_info="($caller_function:$caller_line)"
+    fi
+    
+    # Format log message
+    local log_message="$timestamp [$level] $caller_info $message"
+    
+    # Write to log file
+    echo "$log_message" >> "$LOG_FILE"
+    
+    # Display to console based on level
     case "$level" in
-        "ERROR") echo -e "${RED}${log_msg}${NC}" ;;
-        "WARN")  echo -e "${YELLOW}${log_msg}${NC}" ;;
-        "INFO")  echo -e "${GREEN}${log_msg}${NC}" ;;
-        "DEBUG") echo -e "${BLUE}${log_msg}${NC}" ;;
-        *)       echo "$log_msg" ;;
-    esac | tee -a "$LOG_FILE"
+        "ERROR")
+            echo -e "\e[31m$log_message\e[0m" >&2
+            ;;
+        "WARN")
+            echo -e "\e[33m$log_message\e[0m"
+            ;;
+        "SUCCESS")
+            echo -e "\e[32m$log_message\e[0m"
+            ;;
+        "INFO")
+            echo "$log_message"
+            ;;
+        "DEBUG")
+            if [ "${DEBUG:-false}" = "true" ]; then
+                echo -e "\e[34m$log_message\e[0m"
+            fi
+            ;;
+    esac
 }
 
-run_cmd() {
-    local cmd="$*"
-    local output
-    local status
-    
-    log "DEBUG" "Executing: $cmd"
-    output=$(eval "$cmd" 2>&1)
-    status=$?
-    
-    if [[ $status -ne 0 ]]; then
-        log "ERROR" "Command failed (status=$status): $cmd"
-        log "ERROR" "Output: $output"
-        return $status
-    fi
-    
-    log "DEBUG" "Command succeeded: $output"
-    return 0
-}
-
-# State management
-save_state() {
-    echo "$1" > "$STATE_FILE"
-    log "DEBUG" "Saved state: $1"
-}
-
-load_state() {
-    if [[ -f "$STATE_FILE" ]]; then
-        cat "$STATE_FILE"
-    fi
-}
-
-# System state check
-check_system_state() {
-    log "INFO" "=== System State Check ==="
-    local diag_file="${DEBUG_DIR}/system_state_$(date +%Y%m%d_%H%M%S).log"
-    {
-        echo "=== System State Details ==="
-        echo "Date: $(date)"
-        echo "Hostname: $(hostname)"
-        echo "User: $(whoami)"
-        ps aux | grep -i dns
-        netstat -tulpn | grep :53
-        echo "=== End System State Details ==="
-    } > "$diag_file"
-    return 0
-}
-
-# Prerequisites check
-check_prerequisites() {
-    log "INFO" "Checking prerequisites..."
-    local missing_deps=()
-    
-    for cmd in systemctl dig ss ufw chattr curl tar wget; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_deps+=("$cmd")
-            log "WARN" "Missing required command: $cmd"
-        fi
-    done
-    
-    if [ ${#missing_deps[@]} -ne 0 ]; then
-        log "ERROR" "Missing required commands: ${missing_deps[*]}"
-        return 1
-    fi
-    
-    if ! ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-        log "ERROR" "No internet connection"
-        return 1
-    fi
-    
-    log "INFO" "All prerequisites met"
-    return 0
-}
+# Error handling
+set -o errexit
+set -o pipefail
+set -o nounset
 
 # Check for root privileges
 check_root() {
@@ -154,29 +78,108 @@ check_root() {
     log "INFO" "Root privileges confirmed"
 }
 
-# Port 53 check and cleanup
+# Installation status checks
+check_dnscrypt_installed() {
+    log "INFO" "Checking DNSCrypt installation..."
+    if [ -f "$DNSCRYPT_BIN_PATH" ] && systemctl is-active --quiet dnscrypt-proxy; then
+        log "INFO" "DNSCrypt is installed and running"
+        return 0
+    else
+        log "INFO" "DNSCrypt is not installed"
+        return 1
+    fi
+}
+
+check_3xui_installed() {
+    log "INFO" "Checking 3x-ui installation..."
+    if [ -f "/usr/local/x-ui/x-ui" ] && systemctl is-active --quiet x-ui; then
+        log "INFO" "3x-ui is installed and running"
+        return 0
+    else
+        log "INFO" "3x-ui is not installed"
+        return 1
+    fi
+}
+
+# Save installation state
+save_state() {
+    echo "$1" > "$STATE_FILE"
+}
+
+# Check system prerequisites
+check_prerequisites() {
+    log "INFO" "Checking prerequisites..."
+    
+    # Check required commands
+    local required_commands=("curl" "wget" "tar" "systemctl" "dig" "ss")
+    local missing_commands=()
+    
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_commands+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing_commands[@]} -ne 0 ]; then
+        log "ERROR" "Missing required commands: ${missing_commands[*]}"
+        log "INFO" "Please install: ${missing_commands[*]}"
+        return 1
+    fi
+    
+    log "INFO" "All prerequisites met"
+    return 0
+}
+
+# Check system state
+check_system_state() {
+    log "INFO" "Checking system state..."
+    
+    # Check systemd
+    if ! pidof systemd >/dev/null; then
+        log "ERROR" "systemd is not running"
+        return 1
+    fi
+    
+    # Check system load
+    local load=$(uptime | awk -F'load average:' '{ print $2 }' | cut -d, -f1)
+    if (( $(echo "$load > 5.0" | bc -l) )); then
+        log "WARN" "High system load detected: $load"
+    fi
+    
+    # Check available memory
+    local mem_available=$(free | awk '/^Mem:/ {print $7}')
+    if [ "$mem_available" -lt 102400 ]; then
+        log "WARN" "Low memory available: $mem_available KB"
+    fi
+    
+    # Check disk space
+    local disk_space=$(df -k /usr/local/bin | awk 'NR==2 {print $4}')
+    if [ "$disk_space" -lt 102400 ]; then
+        log "ERROR" "Insufficient disk space: $disk_space KB"
+        return 1
+    fi
+    
+    log "INFO" "System state check passed"
+    return 0
+}
+
+# Check port 53 availability
 check_port_53() {
-    log "INFO" "=== Checking Port 53 Availability ==="
-    save_state "port_check"
+    log "INFO" "Checking port 53..."
     
-    local port_53_process=$(ss -lptn 'sport = :53' 2>/dev/null)
-    
-    if [[ -n "$port_53_process" ]]; then
+    if ss -lntu | grep -q ':53 '; then
         log "WARN" "Port 53 is in use"
         
-        local dns_services=("systemd-resolved" "named" "bind9" "dnsmasq" "unbound")
+        # Check if systemd-resolved is using port 53
+        if systemctl is-active --quiet systemd-resolved; then
+            log "INFO" "Stopping systemd-resolved..."
+            systemctl stop systemd-resolved
+            systemctl disable systemd-resolved
+        fi
         
-        for service in "${dns_services[@]}"; do
-            if systemctl is-active --quiet "$service"; then
-                log "INFO" "Stopping and disabling $service..."
-                systemctl stop "$service" || log "ERROR" "Failed to stop $service"
-                systemctl disable "$service" || log "ERROR" "Failed to disable $service"
-            fi
-        done
-        
-        sleep 2
-        if ss -lptn 'sport = :53' 2>/dev/null | grep -q ":53"; then
-            log "ERROR" "Port 53 still in use after stopping known services"
+        # Recheck port after stopping services
+        if ss -lntu | grep -q ':53 '; then
+            log "ERROR" "Port 53 is still in use by another service"
             return 1
         fi
     fi
@@ -185,363 +188,116 @@ check_port_53() {
     return 0
 }
 
-# Create system backup
+# Create backup
 create_backup() {
-    log "INFO" "=== Creating System Backup ==="
-    save_state "backup"
+    log "INFO" "Creating backup..."
     
     mkdir -p "$BACKUP_DIR"
     
-    local backup_files=(
-        "/etc/dnscrypt-proxy"
-        "/etc/systemd/resolved.conf"
-        "/etc/resolv.conf"
-        "/etc/ufw"
-    )
+    # Backup DNS configuration
+    if [ -f "/etc/resolv.conf" ]; then
+        cp -p "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
+    fi
     
-    for item in "${backup_files[@]}"; do
-        if [[ -e "$item" ]]; then
-            cp -a "$item" "$BACKUP_DIR/" || log "WARN" "Failed to backup $item"
-        fi
-    done
+    # Backup systemd-resolved configuration if exists
+    if [ -f "/etc/systemd/resolved.conf" ]; then
+        cp -p "/etc/systemd/resolved.conf" "${BACKUP_DIR}/resolved.conf.backup"
+    fi
     
-    ufw status verbose > "$BACKUP_DIR/ufw_status.before"
+    # Backup existing DNSCrypt configuration if exists
+    if [ -f "$DNSCRYPT_CONFIG" ]; then
+        cp -p "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy.toml.backup"
+    fi
+    
+    # Backup 3x-ui configuration if exists
+    if [ -f "/usr/local/x-ui/config.json" ]; then
+        cp -p "/usr/local/x-ui/config.json" "${BACKUP_DIR}/x-ui-config.json.backup"
+    fi
+    
     log "INFO" "Backup created in $BACKUP_DIR"
+    return 0
 }
 
-# Rollback system changes
+# System rollback function
 rollback_system() {
     log "INFO" "=== Starting System Rollback ==="
-    local state=$(load_state)
     
-    case "$state" in
-        "installation")
-            log "INFO" "Rolling back DNSCrypt-proxy installation..."
-            systemctl stop dnscrypt-proxy 2>/dev/null || true
-            systemctl disable dnscrypt-proxy 2>/dev/null || true
-            rm -f /etc/systemd/system/dnscrypt-proxy.service
-            systemctl daemon-reload
-            
-            rm -f "$DNSCRYPT_BIN_PATH"
-            rm -rf "/etc/dnscrypt-proxy"
-            rm -rf "$DNSCRYPT_CACHE_DIR"
-            
-            chattr -i /etc/resolv.conf 2>/dev/null || true
-            if [[ -f "$BACKUP_DIR/resolv.conf" ]]; then
-                cp "$BACKUP_DIR/resolv.conf" /etc/resolv.conf
-            fi
-            
-            systemctl enable systemd-resolved 2>/dev/null || true
-            systemctl start systemd-resolved 2>/dev/null || true
-            ;&
-        "backup")
-            log "INFO" "Restoring system configuration..."
-            if [[ -d "$BACKUP_DIR" ]]; then
-                for file in "$BACKUP_DIR"/*; do
-                    if [[ -f "$file" ]]; then
-                        cp -f "$file" "/${file##*/}" 2>/dev/null || true
-                    fi
-                done
-            fi
-            ;&
-        "port_check")
-            log "INFO" "Restoring DNS services..."
-            for service in systemd-resolved named bind9 dnsmasq unbound; do
-                if systemctl is-enabled "$service" &>/dev/null; then
-                    systemctl start "$service" 2>/dev/null || true
-                fi
-            done
-            ;;
-        *)
-            log "WARN" "No state found, performing full rollback..."
-            ;;
-    esac
+    # Stop services
+    log "INFO" "Rolling back DNSCrypt-proxy installation..."
+    systemctl stop dnscrypt-proxy 2>/dev/null || true
+    systemctl disable dnscrypt-proxy 2>/dev/null || true
+    
+    # Remove files
+    rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null || true
+    rm -rf "/etc/dnscrypt-proxy" 2>/dev/null || true
+    rm -rf "$DNSCRYPT_CACHE_DIR" 2>/dev/null || true
+    
+    # Restore system configuration
+    log "INFO" "Restoring system configuration..."
+    if [ -f "${BACKUP_DIR}/resolv.conf.backup" ]; then
+        cp -f "${BACKUP_DIR}/resolv.conf.backup" "/etc/resolv.conf"
+    fi
+    
+    # Restore DNS services
+    log "INFO" "Restoring DNS services..."
+    if systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
+        systemctl start systemd-resolved
+        systemctl enable systemd-resolved
+    fi
+    
+    # Remove state file
+    rm -f "$STATE_FILE" 2>/dev/null || true
     
     log "INFO" "System rollback completed"
 }
 
-install_dnscrypt() {
-    log "INFO" "=== Installing DNSCrypt-proxy ==="
-    save_state "installation"
-
-    # Create user and group
-    log "INFO" "Creating DNSCrypt user and group..."
-    groupadd -f "$DNSCRYPT_GROUP"
-    useradd -r -M -N -g "$DNSCRYPT_GROUP" -s /bin/false "$DNSCRYPT_USER" 2>/dev/null || true
-
-    # Download and install binary
-    log "INFO" "Downloading DNSCrypt-proxy..."
-    cd /tmp
-    rm -f dnscrypt.tar.gz # Clean previous downloads
+# Configure 3x-ui DNS
+configure_3xui_dns() {
+    log "INFO" "=== Configuring 3x-ui DNS settings ==="
     
-    # Исправленные URL'ы
-    DOWNLOAD_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
-    ALTERNATIVE_URL="https://download.dnscrypt.info/dnscrypt-proxy/2.1.7/dnscrypt-proxy-linux_x86_64-2.1.7.tar.gz"
-    BINARY_URL="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.7/dnscrypt-proxy-linux_x86_64"
+    local xui_config="/usr/local/x-ui/config.json"
     
-    log "INFO" "Using primary download URL: ${DOWNLOAD_URL}"
+    # Verify config exists
+    if [ ! -f "$xui_config" ]; then
+        log "ERROR" "3x-ui configuration file not found"
+        return 1
+    fi
     
-    # Enhanced verify_download function
-    verify_download() {
-        local file="$1"
-        log "DEBUG" "Checking file: $file"
-        
-        # Check if file exists
-        if [ ! -f "$file" ]; then
-            log "ERROR" "File does not exist: $file"
-            return 1
-        fi
-        
-        # Check file size
-        local file_size=$(stat -c%s "$file")
-        log "DEBUG" "File size: $file_size bytes"
-        if [ "$file_size" -lt 1000 ]; then
-            log "ERROR" "File is too small: $file_size bytes"
-            return 1
-        fi
-        
-        # Check file type using hexdump
-        local file_header=$(hexdump -n 2 -e '2/1 "%02x"' "$file")
-        log "DEBUG" "File header: $file_header"
-        if [ "$file_header" != "1f8b" ]; then
-            log "ERROR" "Invalid gzip header: $file_header (expected: 1f8b)"
-            rm -f "$file"
-            return 1
-        fi
-        
-        # Additional file type check
-        local file_type=$(file -b "$file")
-        log "DEBUG" "File type: $file_type"
-        
+    # Backup config
+    cp "$xui_config" "${xui_config}.backup"
+    
+    # Get current DNS settings
+    local current_dns=$(grep -o '"dns_server":"[^"]*"' "$xui_config" | cut -d'"' -f4)
+    log "INFO" "Current DNS server in 3x-ui: $current_dns"
+    
+    # Update DNS server to DNSCrypt
+    sed -i 's/"dns_server":"[^"]*"/"dns_server":"127.0.0.1"/' "$xui_config"
+    
+    # Restart 3x-ui
+    systemctl restart x-ui
+    
+    # Verify service status
+    if systemctl is-active --quiet x-ui; then
+        log "INFO" "3x-ui DNS configuration updated successfully"
         return 0
-    }
-
-    # Download function with detailed logging
-    download_file() {
-        local url="$1"
-        local output="$2"
-        local method="$3"
-        
-        log "INFO" "Downloading using $method from: $url"
-        
-        case "$method" in
-            "curl")
-                if curl -L --connect-timeout 10 --max-time 60 \
-                    -H "Accept: application/octet-stream" \
-                    -H "User-Agent: Mozilla/5.0" \
-                    -o "$output" "$url" 2>&1; then
-                    log "DEBUG" "$method download completed"
-                    return 0
-                fi
-                ;;
-            "wget")
-                if wget --no-check-certificate --timeout=10 --tries=3 \
-                    --header="Accept: application/octet-stream" \
-                    --user-agent="Mozilla/5.0" \
-                    -O "$output" "$url" 2>&1; then
-                    log "DEBUG" "$method download completed"
-                    return 0
-                fi
-                ;;
-        esac
-        return 1
-    }
-
-    # Try downloading the archive first
-    log "INFO" "Attempting archive download..."
-    if download_file "$DOWNLOAD_URL" "dnscrypt.tar.gz" "curl"; then
-        if verify_download "dnscrypt.tar.gz"; then
-            log "INFO" "Archive download successful"
-        else
-            log "WARN" "Primary archive download failed, trying alternative URL..."
-            if download_file "$ALTERNATIVE_URL" "dnscrypt.tar.gz" "curl"; then
-                if ! verify_download "dnscrypt.tar.gz"; then
-                    log "WARN" "Alternative archive download failed, trying direct binary..."
-                    if download_file "$BINARY_URL" "$DNSCRYPT_BIN_PATH" "curl"; then
-                        chmod 755 "$DNSCRYPT_BIN_PATH"
-                        log "INFO" "Direct binary download successful"
-                    else
-                        log "ERROR" "All download attempts failed"
-                        return 1
-                    fi
-                fi
-            else
-                log "ERROR" "Failed to download from alternative URL"
-                return 1
-            fi
-        fi
     else
-        log "WARN" "Curl download failed, trying wget..."
-        if ! download_file "$DOWNLOAD_URL" "dnscrypt.tar.gz" "wget"; then
-            log "ERROR" "All download attempts failed"
-            return 1
-        fi
-    fi
-
-    # If we have the archive, extract it
-    if [ -f "dnscrypt.tar.gz" ] && [ ! -f "$DNSCRYPT_BIN_PATH" ]; then
-        log "INFO" "Extracting archive..."
-        if ! tar xzf dnscrypt.tar.gz; then
-            log "ERROR" "Failed to extract archive"
-            return 1
-        fi
-
-        if [ ! -f "linux-x86_64/dnscrypt-proxy" ]; then
-            log "ERROR" "Binary not found in extracted archive"
-            return 1
-        fi
-
-        cp "linux-x86_64/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH" || {
-            log "ERROR" "Failed to copy binary"
-            return 1
-        }
-
-        chmod 755 "$DNSCRYPT_BIN_PATH"
-    fi
-
-    # Create directories and set permissions
-    mkdir -p /etc/dnscrypt-proxy
-    mkdir -p "$DNSCRYPT_CACHE_DIR"
-    chown -R "$DNSCRYPT_USER:$DNSCRYPT_GROUP" "$DNSCRYPT_CACHE_DIR"
-
-    # Configure DNSCrypt
-    log "INFO" "Configuring DNSCrypt-proxy..."
-    cat > "$DNSCRYPT_CONFIG" << 'EOL'
-server_names = ['cloudflare']
-listen_addresses = ['127.0.0.1:53']
-max_clients = 250
-ipv4_servers = true
-ipv6_servers = false
-dnscrypt_servers = true
-doh_servers = true
-require_dnssec = true
-require_nolog = true
-require_nofilter = true
-force_tcp = false
-timeout = 2500
-keepalive = 30
-cert_refresh_delay = 240
-bootstrap_resolvers = ['1.1.1.1:53', '8.8.8.8:53']
-ignore_system_dns = true
-netprobe_timeout = 30
-cache = true
-cache_size = 4096
-cache_min_ttl = 600
-cache_max_ttl = 86400
-cache_neg_min_ttl = 60
-cache_neg_max_ttl = 600
-[static]
-[sources]
-  [sources.'public-resolvers']
-  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md', 'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md']
-  cache_file = '/var/cache/dnscrypt-proxy/public-resolvers.md'
-  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
-  refresh_delay = 72
-  prefix = ''
-EOL
-
-    # Create systemd service
-    log "INFO" "Creating systemd service..."
-    cat > /etc/systemd/system/dnscrypt-proxy.service << EOL
-[Unit]
-Description=DNSCrypt-proxy client
-Documentation=https://github.com/DNSCrypt/dnscrypt-proxy/wiki
-After=network.target
-Before=nss-lookup.target
-Wants=network.target nss-lookup.target
-
-[Service]
-Type=simple
-NonBlocking=true
-User=$DNSCRYPT_USER
-Group=$DNSCRYPT_GROUP
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
-ExecStart=$DNSCRYPT_BIN_PATH -config $DNSCRYPT_CONFIG
-Restart=always
-RestartSec=30
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-    # Configure system resolver
-    log "INFO" "Configuring system resolver..."
-    systemctl disable systemd-resolved || true
-    systemctl stop systemd-resolved || true
-    
-    sleep 2
-    if ss -lptn 'sport = :53' 2>/dev/null | grep -q ":53"; then
-        log "ERROR" "Port 53 is still in use"
+        log "ERROR" "Failed to restart 3x-ui after DNS configuration"
+        mv "${xui_config}.backup" "$xui_config"
+        systemctl restart x-ui
         return 1
     fi
-    
-    rm -f /etc/resolv.conf
-    echo "nameserver 127.0.0.1" > /etc/resolv.conf
-    chattr +i /etc/resolv.conf
-
-    # Start service with additional checks
-    log "INFO" "Starting DNSCrypt-proxy service..."
-    systemctl daemon-reload
-    systemctl enable dnscrypt-proxy
-    
-    if ! systemctl start dnscrypt-proxy; then
-        log "ERROR" "Failed to start DNSCrypt-proxy service"
-        journalctl -u dnscrypt-proxy --no-pager -n 50 >> "$LOG_FILE"
-        return 1
-    fi
-    
-    # Wait and verify service is running
-    local max_attempts=10
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        if systemctl is-active --quiet dnscrypt-proxy; then
-            log "INFO" "DNSCrypt-proxy service is running"
-            sleep 2
-            return 0
-        fi
-        log "INFO" "Waiting for service to start (attempt $attempt/$max_attempts)..."
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-
-    log "ERROR" "DNSCrypt-proxy service failed to start within timeout"
-    return 1
 }
 
-# Error handler
-error_handler() {
-    local line_no="$1"
-    local command="$2"
-    local exit_code="$3"
-    
-    log "ERROR" "Script failed at line ${line_no}"
-    log "ERROR" "Failed command: ${command}"
-    log "ERROR" "Exit code: ${exit_code}"
-    
-    rollback_system
-}
-
-# Cleanup function
-cleanup() {
-    local exit_code=$?
-    if [[ $exit_code -ne 0 ]]; then
-        log "ERROR" "Script failed with exit code ${exit_code}"
-        rollback_system
-    fi
-}
-
+# Installation verification
 verify_installation() {
     log "INFO" "=== Verifying DNSCrypt Installation ==="
     local issues=0
 
-    # Check if binary exists and is executable
+    # Check binary
     if [ ! -x "$DNSCRYPT_BIN_PATH" ]; then
-        log "ERROR" "DNSCrypt binary missing or not executable at $DNSCRYPT_BIN_PATH"
+        log "ERROR" "DNSCrypt binary missing or not executable"
         issues=$((issues + 1))
     else
-        # Check binary version
         local version_output
         version_output=$("$DNSCRYPT_BIN_PATH" --version 2>&1)
         if [ $? -ne 0 ]; then
@@ -552,64 +308,22 @@ verify_installation() {
         fi
     fi
 
-    # Check configuration file
-    if [ ! -f "$DNSCRYPT_CONFIG" ]; then
-        log "ERROR" "Configuration file not found at $DNSCRYPT_CONFIG"
-        issues=$((issues + 1))
-    else
-        if [ ! -r "$DNSCRYPT_CONFIG" ]; then
-            log "ERROR" "Configuration file not readable at $DNSCRYPT_CONFIG"
-            issues=$((issues + 1))
-        fi
-    fi
-
     # Check service status
     if ! systemctl is-active --quiet dnscrypt-proxy; then
         log "ERROR" "DNSCrypt service is not running"
         systemctl status dnscrypt-proxy >> "$LOG_FILE"
         issues=$((issues + 1))
-    else
-        log "INFO" "DNSCrypt service is running"
     fi
 
-    # Check if port 53 is listening
-    if ! ss -lntu | grep -q ':53 '; then
-        log "ERROR" "No service listening on port 53"
-        issues=$((issues + 1))
-    else
-        log "INFO" "Service is listening on port 53"
-    fi
-
-    # Test DNS resolution
+    # Check DNS resolution
     if ! dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
-        log "ERROR" "DNS resolution test failed for google.com"
+        log "ERROR" "DNS resolution test failed"
         issues=$((issues + 1))
-    else
-        log "INFO" "DNS resolution test passed"
-    fi
-
-    # Check cache directory
-    if [ ! -d "$DNSCRYPT_CACHE_DIR" ]; then
-        log "ERROR" "Cache directory missing at $DNSCRYPT_CACHE_DIR"
-        issues=$((issues + 1))
-    else
-        if [ ! -w "$DNSCRYPT_CACHE_DIR" ]; then
-            log "ERROR" "Cache directory not writable at $DNSCRYPT_CACHE_DIR"
-            issues=$((issues + 1))
-        fi
-    fi
-
-    # Check resolv.conf
-    if ! grep -q "nameserver 127.0.0.1" /etc/resolv.conf; then
-        log "ERROR" "resolv.conf not configured correctly"
-        issues=$((issues + 1))
-    else
-        log "INFO" "resolv.conf configured correctly"
     fi
 
     # Final verdict
     if [ $issues -eq 0 ]; then
-        log "INFO" "All verification checks passed successfully"
+        log "INFO" "All verification checks passed"
         return 0
     else
         log "ERROR" "Verification failed with $issues issue(s)"
@@ -617,43 +331,85 @@ verify_installation() {
     fi
 }
 
-# Main installation process
+# Main installation function
 main() {
-    log "INFO" "Starting DNSCrypt-proxy installation (Version: $VERSION)"
+    log "INFO" "Starting script execution (Version: $VERSION)"
     log "INFO" "Script start time: $SCRIPT_START_TIME"
     log "INFO" "Current user: $CURRENT_USER"
     
     check_root || exit 1
-    check_prerequisites || exit 1
-    check_system_state || exit 1
-    check_port_53 || exit 1
-    create_backup || exit 1
     
-    log "INFO" "Beginning DNSCrypt installation..."
-    if ! install_dnscrypt; then
-        log "ERROR" "Installation failed"
-        rollback_system
+    # Check DNSCrypt installation
+    if ! check_dnscrypt_installed; then
+        log "INFO" "DNSCrypt not found, starting installation..."
+        check_prerequisites || exit 1
+        check_system_state || exit 1
+        check_port_53 || exit 1
+        create_backup || exit 1
+        
+        if ! install_dnscrypt; then
+            log "ERROR" "Installation failed"
+            rollback_system
+            exit 1
+        fi
+        
+        if ! verify_installation; then
+            log "ERROR" "Installation verification failed"
+            rollback_system
+            exit 1
+        fi
+        
+        log "SUCCESS" "DNSCrypt installation completed successfully"
+        log "INFO" "Please restart the script to configure 3x-ui integration"
+        exit 0
+    fi
+    
+    # Check 3x-ui installation
+    if ! check_3xui_installed; then
+        log "ERROR" "3x-ui is not installed. Please install 3x-ui first"
+        log "INFO" "You can install 3x-ui using: bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
         exit 1
     fi
     
-    log "INFO" "Verifying installation..."
-    if ! verify_installation; then
-        log "ERROR" "Installation verification failed"
-        rollback_system
-        exit 1
-    fi
+    # Configure 3x-ui DNS integration
+    echo
+    echo "DNSCrypt and 3x-ui are both installed."
+    echo "Would you like to configure 3x-ui to use DNSCrypt for DNS resolution?"
+    echo "This will:"
+    echo "1. Update 3x-ui DNS settings to use localhost (127.0.0.1)"
+    echo "2. Restart 3x-ui service to apply changes"
+    echo "3. Create a backup of current settings"
+    echo
+    read -p "Continue? (y/n): " -n 1 -r
+    echo
     
-    log "SUCCESS" "=== DNSCrypt-proxy Successfully Installed ==="
-    log "INFO" "Backup Directory: $BACKUP_DIR"
-    log "INFO" "Installation Log: $LOG_FILE"
-    return 0
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if configure_3xui_dns; then
+            log "SUCCESS" "3x-ui successfully configured to use DNSCrypt"
+            log "INFO" "Configuration complete!"
+        else
+            log "ERROR" "Failed to configure 3x-ui DNS settings"
+            exit 1
+        fi
+    else
+        log "INFO" "DNS configuration cancelled by user"
+        exit 0
+    fi
 }
 
-# Set error handler
-trap 'error_handler ${LINENO} "${BASH_COMMAND}" $?' ERR
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    log "INFO" "Script execution completed with exit code: $exit_code"
+    if [ $exit_code -ne 0 ]; then
+        log "ERROR" "Script failed with exit code $exit_code"
+        rollback_system
+    fi
+    exit $exit_code
+}
 
-# Set cleanup handler
+# Set cleanup trap
 trap cleanup EXIT
 
-# Start installation
+# Start execution
 main
