@@ -687,7 +687,6 @@ verify_installation() {
         error_details+=("Отсутствует файл конфигурации")
     else
         log "INFO" "✓ Файл конфигурации найден"
-        # Проверка содержимого конфигурации
         if ! grep -q "listen_addresses.*=.*\['127.0.0.1:53'\]" "$DNSCRYPT_CONFIG"; then
             log "ERROR" "Некорректная конфигурация прослушиваемого адреса"
             errors=$((errors + 1))
@@ -807,7 +806,7 @@ verify_installation() {
         log "DEBUG" "Список проблем:"
         for detail in "${error_details[@]}"; do
             log "DEBUG" "- $detail"
-        fi
+        done
         return 1
     fi
 }
