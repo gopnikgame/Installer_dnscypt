@@ -144,7 +144,91 @@ check_3xui_installed() {
 save_state() {
     echo "$1" > "$STATE_FILE"
 }
-
+# Проверка системных требований
+check_prerequisites() {
+    log "INFO" "Проверка необходимых компонентов..."
+    
+    local required_commands=("curl" "wget" "tar" "systemctl" "dig" "ss" "useradd" "groupadd" "sed" "grep")
+    local missing_commands=()
+    local missing_packages=()
+    
+    # Проверка наличия команд
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_commands+=("$cmd")
+            case "$cmd" in
+                "curl") missing_packages+=("curl");;
+                "wget") missing_packages+=("wget");;
+                "tar") missing_packages+=("tar");;
+                "systemctl") missing_packages+=("systemd");;
+                "dig") missing_packages+=("dnsutils" "bind-utils");;
+                "ss") missing_packages+=("iproute2");;
+                "useradd"|"groupadd") missing_packages+=("shadow-utils");;
+                "sed"|"grep") missing_packages+=("grep" "sed");;
+            esac
+        fi
+    done
+    
+    # Если есть отсутствующие команды
+    if [ ${#missing_commands[@]} -ne 0 ]; then
+        log "ERROR" "Отсутствуют необходимые команды: ${missing_commands[*]}"
+        
+        # Определение пакетного менеджера
+        if command -v apt-get >/dev/null 2>&1; then
+            log "INFO" "Обнаружен apt-get, установка необходимых пакетов..."
+            apt-get update
+            apt-get install -y ${missing_packages[@]}
+        elif command -v yum >/dev/null 2>&1; then
+            log "INFO" "Обнаружен yum, установка необходимых пакетов..."
+            yum install -y ${missing_packages[@]}
+        elif command -v dnf >/dev/null 2>&1; then
+            log "INFO" "Обнаружен dnf, установка необходимых пакетов..."
+            dnf install -y ${missing_packages[@]}
+        else
+            log "ERROR" "Не удалось определить пакетный менеджер"
+            log "INFO" "Установите вручную следующие пакеты: ${missing_packages[*]}"
+            return 1
+        fi
+        
+        # Повторная проверка после установки
+        for cmd in "${required_commands[@]}"; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+                log "ERROR" "Не удалось установить все необходимые компоненты"
+                return 1
+            fi
+        done
+    fi
+    
+    # Проверка версии системы
+    if [ -f /etc/os-release ]; then
+        source /etc/os-release
+        log "INFO" "Обнаружена система: $PRETTY_NAME"
+    else
+        log "WARN" "Не удалось определить версию системы"
+    fi
+    
+    # Проверка архитектуры
+    local arch=$(uname -m)
+    case "$arch" in
+        x86_64|aarch64)
+            log "INFO" "Поддерживаемая архитектура: $arch"
+            ;;
+        *)
+            log "ERROR" "Неподдерживаемая архитектура: $arch"
+            return 1
+            ;;
+    esac
+    
+    # Проверка свободного места
+    local free_space=$(df -k /usr/local/bin | awk 'NR==2 {print $4}')
+    if [ "$free_space" -lt 102400 ]; then # Минимум 100MB
+        log "ERROR" "Недостаточно свободного места: $free_space KB (требуется минимум 100MB)"
+        return 1
+    fi
+    
+    log "SUCCESS" "Все необходимые компоненты присутствуют"
+    return 0
+}
 # Откат системы к исходному состоянию
 rollback_system() {
     log "INFO" "=== Начало отката системы ==="
