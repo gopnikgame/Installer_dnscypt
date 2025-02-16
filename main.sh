@@ -1,6 +1,6 @@
 #!/bin/bash
 # main.sh
-# Created: 2025-02-16 14:19:45 UTC
+# Created: 2025-02-16 16:32:02 UTC
 # Author: gopnikgame
 # Description: Главный скрипт управления DNSCrypt
 
@@ -8,14 +8,14 @@
 VERSION="2.0.55"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 MODULES_DIR="/usr/local/dnscrypt-scripts/modules"
-GITHUB_RAW_URL="https://raw.githubusercontent.com/gopnikgame/dnscrypt-installer/main"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/modules"
 LOG_FILE="/var/log/dnscrypt-installer.log"
 
 # Цветовые коды для вывода
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+NC="\033[0m" # No Color
 
 # Функция логирования
 log() {
@@ -23,7 +23,6 @@ log() {
     local message=$2
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     
-    # Вывод в консоль с цветом
     case $level in
         "ERROR")
             echo -e "${RED}$timestamp [$level] $message${NC}"
@@ -39,7 +38,6 @@ log() {
             ;;
     esac
     
-    # Запись в лог-файл
     echo "$timestamp [$level] $message" >> "$LOG_FILE"
 }
 
@@ -62,14 +60,14 @@ create_directories() {
 # Загрузка модуля
 download_module() {
     local module_name=$1
-    local module_url="$GITHUB_RAW_URL/modules/${module_name}.sh"
+    local module_url="$GITHUB_RAW_URL/${module_name}.sh"
     local module_path="$MODULES_DIR/${module_name}.sh"
     
-    log "INFO" "Загрузка модуля $module_name..."
+    log "INFO" "Загрузка модуля $module_name... из $module_url"
     
     if wget -q "$module_url" -O "$module_path"; then
         chmod +x "$module_path"
-        log "SUCCESS" "Модуль $module_name загружен"
+        log "SUCCESS" "Модуль $module_name загружен успешно"
         return 0
     else
         log "ERROR" "Не удалось загрузить модуль $module_name"
@@ -82,11 +80,9 @@ ensure_module() {
     local module_name=$1
     local module_path="$MODULES_DIR/${module_name}.sh"
     
-    if [ ! -f "$module_path" ] || [ ! -x "$module_path" ]; then
-        download_module "$module_name"
-        return $?
-    fi
-    return 0
+    # Всегда загружаем свежую версию модуля
+    download_module "$module_name"
+    return $?
 }
 
 # Выполнение модуля
@@ -115,8 +111,8 @@ execute_module() {
 show_header() {
     clear
     echo -e "${GREEN}=== DNSCrypt Manager v$VERSION ===${NC}"
-    echo "Текущее время: $(date '+%Y-%m-%d %H:%M:%S UTC')"
-    echo "Пользователь: $USER"
+    echo "Текущее время: $(date "+%Y-%m-%d %H:%M:%S UTC")"
+    echo "Пользователь: gopnikgame"
     echo "----------------------------------------"
 }
 
