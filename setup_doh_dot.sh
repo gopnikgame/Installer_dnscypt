@@ -471,7 +471,7 @@ check_dnscrypt_installed() {
 install_dnscrypt() {
     log "INFO" "=== Установка DNSCrypt ==="
     local installation_steps=0
-    local total_steps=7
+    local total_steps=8  # Увеличили на 1 шаг для установки capabilities
     
     # Шаг 1: Создание пользователя и группы
     log "INFO" "(Шаг 1/$total_steps) Создание системного пользователя и группы..."
@@ -577,8 +577,37 @@ EOL
     chmod 755 /var/cache/dnscrypt-proxy
     installation_steps=$((installation_steps + 1))
     
-    # Шаг 6: Создание systemd сервиса
-    log "INFO" "(Шаг 6/$total_steps) Настройка systemd сервиса..."
+    # Шаг 6: Настройка capabilities
+    log "INFO" "(Шаг 6/$total_steps) Настройка прав для работы с портом 53..."
+    if ! command -v setcap >/dev/null 2>&1; then
+        log "INFO" "Установка утилиты setcap..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update && apt-get install -y libcap2-bin
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y libcap
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y libcap
+        else
+            log "ERROR" "Не удалось установить утилиту setcap"
+            return 1
+        fi
+    fi
+    
+    # Устанавливаем capabilities
+    if ! setcap 'cap_net_bind_service=+ep' "$DNSCRYPT_BIN_PATH"; then
+        log "ERROR" "Не удалось установить capabilities"
+        return 1
+    fi
+    
+    # Проверяем установку capabilities
+    if ! getcap "$DNSCRYPT_BIN_PATH" | grep -q 'cap_net_bind_service'; then
+        log "ERROR" "Проверка установки capabilities не удалась"
+        return 1
+    fi
+    installation_steps=$((installation_steps + 1))
+    
+    # Шаг 7: Создание systemd сервиса
+    log "INFO" "(Шаг 7/$total_steps) Настройка systemd сервиса..."
     cat > /etc/systemd/system/dnscrypt-proxy.service << EOL
 [Unit]
 Description=DNSCrypt-proxy client
@@ -603,8 +632,8 @@ WantedBy=multi-user.target
 EOL
     installation_steps=$((installation_steps + 1))
     
-    # Шаг 7: Запуск службы
-    log "INFO" "(Шаг 7/$total_steps) Запуск службы..."
+    # Шаг 8: Запуск службы
+    log "INFO" "(Шаг 8/$total_steps) Запуск службы..."
     systemctl daemon-reload
     systemctl enable dnscrypt-proxy
     
@@ -635,23 +664,26 @@ EOL
 
 # Проверка установки
 verify_installation() {
-    log "INFO" "Проверка установки DNSCrypt..."
+    log "INFO" "=== Проверка установки DNSCrypt ==="
     local errors=0
     
     # Проверка бинарного файла
+    log "INFO" "Проверка бинарного файла..."
     if [ ! -x "$DNSCRYPT_BIN_PATH" ]; then
         log "ERROR" "Бинарный файл DNSCrypt не найден или не исполняемый"
+        log "DEBUG" "Путь: $DNSCRYPT_BIN_PATH"
         errors=$((errors + 1))
     else
-        log "INFO" "Бинарный файл DNSCrypt найден и имеет правильные права"
+        log "INFO" "✓ Бинарный файл DNSCrypt найден и имеет правильные права"
     fi
     
     # Проверка конфигурации
+    log "INFO" "Проверка конфигурации..."
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
         log "ERROR" "Файл конфигурации не найден"
         errors=$((errors + 1))
     else
-        log "INFO" "Файл конфигурации найден"
+        log "INFO" "✓ Файл конфигурации найден"
         # Проверка содержимого конфигурации
         if ! grep -q "listen_addresses.*=.*\['127.0.0.1:53'\]" "$DNSCRYPT_CONFIG"; then
             log "ERROR" "Некорректная конфигурация прослушиваемого адреса"
@@ -660,39 +692,57 @@ verify_installation() {
     fi
     
     # Проверка прав доступа к директориям
-    if [ ! -d "$DNSCRYPT_CACHE_DIR" ]; then
-        log "ERROR" "Директория кэша не существует"
+    log "INFO" "Проверка прав доступа к директориям..."
+    local directories=("$DNSCRYPT_CACHE_DIR" "/var/log/dnscrypt-proxy" "/var/cache/dnscrypt-proxy")
+    for dir in "${directories[@]}"; do
+        if [ ! -d "$dir" ]; then
+            log "ERROR" "Директория $dir не существует"
+            errors=$((errors + 1))
+            continue
+        fi
+        
+        if ! su -s /bin/bash "$DNSCRYPT_USER" -c "test -w '$dir'"; then
+            log "ERROR" "Неправильные права доступа к директории $dir"
+            log "DEBUG" "Текущие права: $(ls -ld "$dir")"
+            errors=$((errors + 1))
+        else
+            log "INFO" "✓ Директория $dir имеет корректные права"
+        fi
+    done
+    
+    # Проверка capabilities
+    log "INFO" "Проверка специальных прав (capabilities)..."
+    if ! command -v getcap >/dev/null 2>&1; then
+        log "ERROR" "Утилита getcap не найдена"
+        errors=$((errors + 1))
+    elif ! getcap "$DNSCRYPT_BIN_PATH" | grep -q 'cap_net_bind_service'; then
+        log "ERROR" "Отсутствуют необходимые права для работы с портом 53"
+        log "DEBUG" "Текущие capabilities: $(getcap "$DNSCRYPT_BIN_PATH")"
         errors=$((errors + 1))
     else
-        if ! su -s /bin/bash "$DNSCRYPT_USER" -c "test -w '$DNSCRYPT_CACHE_DIR'"; then
-            log "ERROR" "Неправильные права доступа к директории кэша"
-            errors=$((errors + 1))
-        fi
+        log "INFO" "✓ Права для работы с портом 53 корректны"
     fi
     
     # Проверка службы
+    log "INFO" "Проверка статуса службы..."
     if ! systemctl is-active --quiet dnscrypt-proxy; then
         log "ERROR" "Служба DNSCrypt не запущена"
-        log "INFO" "Пробуем запустить службу..."
-        systemctl start dnscrypt-proxy
-        sleep 5  # Даем службе время на запуск
-        
-        if ! systemctl is-active --quiet dnscrypt-proxy; then
-            log "ERROR" "Не удалось запустить службу DNSCrypt"
-            log "DEBUG" "Журнал службы:"
-            journalctl -u dnscrypt-proxy --no-pager -n 50
-            errors=$((errors + 1))
-        fi
+        log "DEBUG" "Статус службы:"
+        systemctl status dnscrypt-proxy --no-pager
+        errors=$((errors + 1))
     else
-        log "INFO" "Служба DNSCrypt активна"
+        log "INFO" "✓ Служба DNSCrypt активна"
     fi
     
     # Проверка порта 53
+    log "INFO" "Проверка прослушивания порта 53..."
     if ! ss -lntu | grep -q ':53 .*LISTEN.*'; then
         log "ERROR" "Порт 53 не прослушивается"
+        log "DEBUG" "Текущие прослушиваемые порты:"
+        ss -lntu | grep 'LISTEN'
         errors=$((errors + 1))
     else
-        log "INFO" "Порт 53 прослушивается"
+        log "INFO" "✓ Порт 53 прослушивается"
     fi
     
     # Расширенная проверка DNS резолвинга
@@ -703,13 +753,14 @@ verify_installation() {
     
     for domain in "${test_domains[@]}"; do
         total=$((total + 1))
+        log "DEBUG" "Тестирование резолвинга для $domain..."
         if dig @127.0.0.1 "$domain" +short +timeout=10 > /dev/null 2>&1; then
             log "INFO" "✓ Успешное разрешение $domain"
             success=$((success + 1))
         else
             log "WARN" "✗ Не удалось разрешить $domain"
             # Дополнительная диагностика
-            log "DEBUG" "Пробуем dig с подробным выводом для $domain:"
+            log "DEBUG" "Подробный вывод dig для $domain:"
             dig @127.0.0.1 "$domain" +noall +answer +comments +timeout=10
         fi
     done
@@ -718,18 +769,22 @@ verify_installation() {
         log "ERROR" "Тест DNS резолвинга полностью провален"
         log "DEBUG" "Проверка конфигурации resolv.conf:"
         cat /etc/resolv.conf
+        log "DEBUG" "Проверка маршрутизации DNS-запросов:"
+        traceroute -n -p 53 8.8.8.8 2>&1 || true
         errors=$((errors + 1))
     elif [ $success -lt $total ]; then
         log "WARN" "Частичные проблемы с DNS резолвингом ($success из $total успешно)"
+        errors=$((errors + 1))
     else
-        log "INFO" "DNS резолвинг работает корректно"
+        log "INFO" "✓ DNS резолвинг работает корректно"
     fi
     
+    # Итоговый результат
     if [ $errors -eq 0 ]; then
-        log "SUCCESS" "Проверка установки успешно завершена"
+        log "SUCCESS" "=== Проверка установки успешно завершена ==="
         return 0
     else
-        log "ERROR" "При проверке установки обнаружено $errors ошибок"
+        log "ERROR" "=== При проверке установки обнаружено $errors ошибок ==="
         return 1
     fi
 }
