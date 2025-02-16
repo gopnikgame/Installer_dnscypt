@@ -167,9 +167,28 @@ change_dns() {
         2) server_name="google" ;;
         3) server_name="quad9-dnscrypt-ip4-filter-pri" ;;
         4) server_name="adguard-dns" ;;
-        5)
-            read -p "Введите имя сервера: " server_name
-            ;;
+# При выборе опции 5 (ручной ввод сервера)
+5)
+    echo -e "\n${BLUE}Примеры форматов ввода DNS серверов:${NC}"
+    echo "1. Один сервер: quad9-dnscrypt-ip4-filter-pri"
+    echo "2. Несколько серверов: ['quad9-dnscrypt-ip4-filter-pri', 'cloudflare']"
+    echo "3. С указанием протокола: sdns://... (для DoH/DoT/DNSCrypt серверов)"
+    echo -e "\nПопулярные серверы:"
+    echo "- cloudflare           (Cloudflare DNS)"
+    echo "- google               (Google DNS)"
+    echo "- quad9-dnscrypt-ip4-filter-pri  (Quad9 DNS с фильтрацией)"
+    echo "- adguard-dns         (AdGuard DNS с блокировкой рекламы)"
+    echo "- cleanbrowsing-adult (CleanBrowsing с семейным фильтром)"
+    echo -e "\n${YELLOW}Внимание: Имя сервера должно точно соответствовать записи в resolvers-info.md${NC}"
+    echo -e "${BLUE}Полный список серверов доступен по адресу:${NC}"
+    echo "https://github.com/DNSCrypt/dnscrypt-proxy/wiki/Public-resolvers"
+    
+    read -p $'\nВведите имя сервера или массив серверов: ' server_name
+    if [[ -z "$server_name" ]]; then
+        log "ERROR" "Имя сервера не может быть пустым"
+        return 1
+    fi
+    ;;
         0)
             log "INFO" "Операция отменена"
             return 0
