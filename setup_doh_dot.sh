@@ -467,7 +467,152 @@ check_dnscrypt_installed() {
         return 1
     fi
 }
+# Установка DNSCrypt
+install_dnscrypt() {
+    log "INFO" "=== Установка DNSCrypt ==="
+    
+    # Создание пользователя и группы
+    if ! getent group "$DNSCRYPT_GROUP" >/dev/null; then
+        groupadd -r "$DNSCRYPT_GROUP"
+    fi
+    if ! getent passwd "$DNSCRYPT_USER" >/dev/null; then
+        useradd -r -g "$DNSCRYPT_GROUP" -s /bin/false -d "$DNSCRYPT_CACHE_DIR" "$DNSCRYPT_USER"
+    fi
+    
+    # Загрузка последней версии DNSCrypt
+    local latest_version=$(curl -s https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+    if [ -z "$latest_version" ]; then
+        log "ERROR" "Не удалось получить последнюю версию DNSCrypt"
+        return 1
+    fi
+    
+    local arch
+    case $(uname -m) in
+        x86_64) arch="x86_64";;
+        aarch64) arch="arm64";;
+        *) log "ERROR" "Неподдерживаемая архитектура: $(uname -m)"
+           return 1;;
+    esac
+    
+    local download_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${latest_version}/dnscrypt-proxy-linux_${arch}-${latest_version}.tar.gz"
+    local temp_dir=$(mktemp -d)
+    
+    log "INFO" "Загрузка DNSCrypt версии ${latest_version}..."
+    if ! wget -q "$download_url" -O "${temp_dir}/dnscrypt.tar.gz"; then
+        log "ERROR" "Ошибка загрузки DNSCrypt"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # Распаковка и установка
+    cd "$temp_dir"
+    tar xzf dnscrypt.tar.gz
+    cp "linux-${arch}/dnscrypt-proxy" "$DNSCRYPT_BIN_PATH"
+    chmod 755 "$DNSCRYPT_BIN_PATH"
+    
+    # Создание директорий и настройка прав
+    mkdir -p "/etc/dnscrypt-proxy"
+    mkdir -p "$DNSCRYPT_CACHE_DIR"
+    chown "$DNSCRYPT_USER:$DNSCRYPT_GROUP" "$DNSCRYPT_CACHE_DIR"
+    
+    # Создание базовой конфигурации
+    cat > "$DNSCRYPT_CONFIG" << EOL
+server_names = ['cloudflare']
+listen_addresses = ['127.0.0.1:53']
+max_clients = 250
+ipv4_servers = true
+ipv6_servers = false
+dnscrypt_servers = true
+doh_servers = true
+require_dnssec = true
+require_nolog = true
+require_nofilter = true
+force_tcp = false
+timeout = 5000
+keepalive = 30
+log_level = 2
+use_syslog = true
+cache = true
+cache_size = 4096
+cache_min_ttl = 2400
+cache_max_ttl = 86400
+cache_neg_min_ttl = 60
+cache_neg_max_ttl = 600
+[sources]
+  [sources.'public-resolvers']
+  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md']
+  cache_file = 'public-resolvers.md'
+  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
+  refresh_delay = 72
+  prefix = ''
+EOL
 
+    # Создание systemd сервиса
+    cat > /etc/systemd/system/dnscrypt-proxy.service << EOL
+[Unit]
+Description=DNSCrypt-proxy client
+Documentation=https://github.com/DNSCrypt/dnscrypt-proxy/wiki
+After=network.target
+Before=nss-lookup.target
+Wants=network.target nss-lookup.target
+
+[Service]
+NonBlocking=true
+User=$DNSCRYPT_USER
+Group=$DNSCRYPT_GROUP
+Type=simple
+ExecStart=$DNSCRYPT_BIN_PATH -config $DNSCRYPT_CONFIG
+Restart=always
+RestartSec=30
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Очистка
+    rm -rf "$temp_dir"
+    
+    # Запуск службы
+    systemctl daemon-reload
+    systemctl enable dnscrypt-proxy
+    systemctl start dnscrypt-proxy
+    
+    log "SUCCESS" "DNSCrypt успешно установлен"
+    return 0
+}
+
+# Проверка установки
+verify_installation() {
+    log "INFO" "Проверка установки DNSCrypt..."
+    
+    # Проверка бинарного файла
+    if [ ! -x "$DNSCRYPT_BIN_PATH" ]; then
+        log "ERROR" "Бинарный файл DNSCrypt не найден или не исполняемый"
+        return 1
+    fi
+    
+    # Проверка конфигурации
+    if [ ! -f "$DNSCRYPT_CONFIG" ]; then
+        log "ERROR" "Файл конфигурации не найден"
+        return 1
+    fi
+    
+    # Проверка службы
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        log "ERROR" "Служба DNSCrypt не запущена"
+        return 1
+    fi
+    
+    # Проверка DNS резолвинга
+    if ! dig @127.0.0.1 google.com +short +timeout=5 > /dev/null; then
+        log "ERROR" "Тест DNS резолвинга не пройден"
+        return 1
+    fi
+    
+    log "SUCCESS" "Проверка установки успешно завершена"
+    return 0
+}
 # Проверка установки 3x-ui
 check_3xui_installed() {
     log "INFO" "Проверка установки 3x-ui..."
