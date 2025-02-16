@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Метаданные
-VERSION="2.0.21"
-SCRIPT_START_TIME="2025-02-16 07:39:59"
+VERSION="2.0.22"
+SCRIPT_START_TIME="2025-02-16 07:49:00"
 CURRENT_USER="gopnikgame"
 
 # Константы
@@ -140,9 +140,49 @@ check_3xui_installed() {
     fi
 }
 
-# Сохранение состояния установки
-save_state() {
-    echo "$1" > "$STATE_FILE"
+# Откат системы к исходному состоянию
+rollback_system() {
+    log "INFO" "=== Начало отката системы ==="
+    
+    # Остановка и отключение DNSCrypt
+    log "INFO" "Остановка DNSCrypt..."
+    systemctl stop dnscrypt-proxy 2>/dev/null || true
+    systemctl disable dnscrypt-proxy 2>/dev/null || true
+    
+    # Удаление файлов DNSCrypt
+    log "INFO" "Удаление файлов DNSCrypt..."
+    rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null || true
+    rm -rf "/etc/dnscrypt-proxy" 2>/dev/null || true
+    rm -rf "$DNSCRYPT_CACHE_DIR" 2>/dev/null || true
+    
+    # Восстановление оригинальной конфигурации DNS
+    log "INFO" "Восстановление конфигурации DNS..."
+    if [ -f "${BACKUP_DIR}/resolv.conf.backup" ]; then
+        cp -f "${BACKUP_DIR}/resolv.conf.backup" "/etc/resolv.conf"
+    fi
+    
+    # Восстановление systemd-resolved если был
+    if [ -f "${BACKUP_DIR}/resolved.conf.backup" ]; then
+        cp -f "${BACKUP_DIR}/resolved.conf.backup" "/etc/systemd/resolved.conf"
+        systemctl enable systemd-resolved 2>/dev/null || true
+        systemctl start systemd-resolved 2>/dev/null || true
+    fi
+    
+    # Восстановление конфигурации 3x-ui если была
+    if [ -f "${BACKUP_DIR}/x-ui-config.json.backup" ]; then
+        cp -f "${BACKUP_DIR}/x-ui-config.json.backup" "/usr/local/x-ui/config.json"
+        systemctl restart x-ui 2>/dev/null || true
+    fi
+    
+    # Удаление временных файлов
+    rm -f "$STATE_FILE" 2>/dev/null || true
+    
+    log "INFO" "Откат системы завершён"
+    
+    # Проверка DNS-резолвинга после отката
+    if ! dig @1.1.1.1 google.com +short +timeout=5 > /dev/null 2>&1; then
+        log "WARN" "После отката возможны проблемы с DNS. Проверьте настройки сети"
+    fi
 }
 
 # Проверка системных требований
@@ -168,6 +208,92 @@ check_prerequisites() {
     return 0
 }
 
+# Проверка состояния системы
+check_system_state() {
+    log "INFO" "Проверка состояния системы..."
+    
+    # Проверка systemd
+    if ! pidof systemd >/dev/null; then
+        log "ERROR" "systemd не запущен"
+        return 1
+    fi
+    
+    # Проверка загрузки системы
+    local load=$(uptime | awk -F'load average:' '{ print $2 }' | cut -d, -f1)
+    if (( $(echo "$load > 5.0" | bc -l) )); then
+        log "WARN" "Высокая загрузка системы: $load"
+    fi
+    
+    # Проверка свободной памяти
+    local mem_available=$(free | awk '/^Mem:/ {print $7}')
+    if [ "$mem_available" -lt 102400 ]; then
+        log "WARN" "Мало свободной памяти: $mem_available КБ"
+    fi
+    
+    # Проверка места на диске
+    local disk_space=$(df -k /usr/local/bin | awk 'NR==2 {print $4}')
+    if [ "$disk_space" -lt 102400 ]; then
+        log "ERROR" "Недостаточно места на диске: $disk_space КБ"
+        return 1
+    fi
+    
+    log "SUCCESS" "Проверка состояния системы успешна"
+    return 0
+}
+
+# Проверка порта 53
+check_port_53() {
+    log "INFO" "Проверка порта 53..."
+    
+    if ss -lntu | grep -q ':53 '; then
+        log "WARN" "Порт 53 занят"
+        
+        if systemctl is-active --quiet systemd-resolved; then
+            log "INFO" "Отключение systemd-resolved..."
+            systemctl stop systemd-resolved
+            systemctl disable systemd-resolved
+        fi
+        
+        if ss -lntu | grep -q ':53 '; then
+            log "ERROR" "Порт 53 всё ещё занят другим сервисом"
+            return 1
+        fi
+    fi
+    
+    log "SUCCESS" "Порт 53 доступен"
+    return 0
+}
+
+# Создание резервных копий
+create_backup() {
+    log "INFO" "Создание резервных копий..."
+    
+    mkdir -p "$BACKUP_DIR"
+    
+    # Бэкап DNS конфигурации
+    if [ -f "/etc/resolv.conf" ]; then
+        cp -p "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
+    fi
+    
+    # Бэкап systemd-resolved
+    if [ -f "/etc/systemd/resolved.conf" ]; then
+        cp -p "/etc/systemd/resolved.conf" "${BACKUP_DIR}/resolved.conf.backup"
+    fi
+    
+    # Бэкап DNSCrypt если есть
+    if [ -f "$DNSCRYPT_CONFIG" ]; then
+        cp -p "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy.toml.backup"
+    fi
+    
+    # Бэкап 3x-ui если есть
+    if [ -f "/usr/local/x-ui/config.json" ]; then
+        cp -p "/usr/local/x-ui/config.json" "${BACKUP_DIR}/x-ui-config.json.backup"
+    fi
+    
+    log "SUCCESS" "Резервные копии созданы в $BACKUP_DIR"
+    return 0
+}
+
 # Функция диагностики DNSCrypt
 diagnose_dnscrypt() {
     log "INFO" "=== Запуск диагностики DNSCrypt ==="
@@ -176,7 +302,6 @@ diagnose_dnscrypt() {
     echo
     echo "🔍 Начинаю комплексную проверку DNSCrypt..."
     echo
-
     # 1. Проверка службы DNSCrypt
     echo "1️⃣ Проверка статуса службы DNSCrypt:"
     if systemctl is-active --quiet dnscrypt-proxy; then
@@ -278,122 +403,19 @@ diagnose_dnscrypt() {
     fi
 }
 
-# Изменение DNS сервера
-change_dns_server() {
-    log "INFO" "=== Изменение DNS сервера ==="
-    
-    echo
-    echo "Доступные DNS серверы:"
-    echo "1) Cloudflare DNS (Быстрый, ориентирован на приватность)"
-    echo "2) Quad9 (Повышенная безопасность, блокировка вредоносных доменов)"
-    echo "3) OpenDNS (Семейный фильтр, блокировка нежелательного контента)"
-    echo "4) AdGuard DNS (Блокировка рекламы и трекеров)"
-    echo "5) Anonymous Montreal (Анонимный релей через Канаду)"
-    echo
-    
-    read -p "Выберите DNS сервер (1-5): " dns_choice
-    echo
-    
-    case $dns_choice in
-        1) selected_server="cloudflare"
-           server_name="Cloudflare DNS";;
-        2) selected_server="quad9"
-           server_name="Quad9";;
-        3) selected_server="opendns"
-           server_name="OpenDNS";;
-        4) selected_server="adguard-dns"
-           server_name="AdGuard DNS";;
-        5) selected_server="anon-cs-montreal"
-           server_name="Anonymous Montreal";;
-        *) log "ERROR" "Неверный выбор"
-           return 1;;
-    esac
-    
-    cp "$DNSCRYPT_CONFIG" "${DNSCRYPT_CONFIG}.backup"
-    
-    log "INFO" "Обновление конфигурации DNSCrypt для использования $server_name..."
-    
-    cat > "$DNSCRYPT_CONFIG" << EOL
-server_names = ['${selected_server}']
-listen_addresses = ['127.0.0.1:53']
-max_clients = 250
-ipv4_servers = true
-ipv6_servers = false
-dnscrypt_servers = true
-doh_servers = true
-require_dnssec = true
-require_nolog = true
-require_nofilter = true
-force_tcp = false
-timeout = 5000
-keepalive = 30
-log_level = 2
-use_syslog = true
-cache = true
-cache_size = 4096
-cache_min_ttl = 2400
-cache_max_ttl = 86400
-cache_neg_min_ttl = 60
-cache_neg_max_ttl = 600
-[sources]
-  [sources.'public-resolvers']
-  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md']
-  cache_file = 'public-resolvers.md'
-  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
-  refresh_delay = 72
-  prefix = ''
-EOL
-
-    systemctl restart dnscrypt-proxy
-    
-    if systemctl is-active --quiet dnscrypt-proxy; then
-        if dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
-            log "SUCCESS" "DNS сервер успешно изменён на $server_name"
-            return 0
-        else
-            log "ERROR" "Тест разрешения DNS не пройден"
-            mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
-            systemctl restart dnscrypt-proxy
-            return 1
-        fi
-    else
-        log "ERROR" "Служба DNSCrypt не запустилась"
-        mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
-        systemctl restart dnscrypt-proxy
-        return 1
+# Функция очистки
+cleanup() {
+    local exit_code=$?
+    log "INFO" "Завершение работы скрипта с кодом: $exit_code"
+    if [ $exit_code -ne 0 ]; then
+        log "ERROR" "Скрипт завершился с ошибкой $exit_code"
+        rollback_system
     fi
+    exit $exit_code
 }
 
-# Функция настройки DNS для 3x-ui
-configure_3xui_dns() {
-    log "INFO" "=== Настройка DNS для 3x-ui ==="
-    
-    local xui_config="/usr/local/x-ui/config.json"
-    
-    if [ ! -f "$xui_config" ]; then
-        log "ERROR" "Конфигурационный файл 3x-ui не найден"
-        return 1
-    fi
-    
-    cp "$xui_config" "${xui_config}.backup"
-    
-    local current_dns=$(grep -o '"dns_server":"[^"]*"' "$xui_config" | cut -d'"' -f4)
-    log "INFO" "Текущий DNS сервер в 3x-ui: $current_dns"
-    
-    sed -i 's/"dns_server":"[^"]*"/"dns_server":"127.0.0.1"/' "$xui_config"
-    
-    systemctl restart x-ui
-    
-    if systemctl is-active --quiet x-ui; then
-        log "SUCCESS" "Настройка DNS для 3x-ui выполнена успешно"
-        return 0
-    else
-        log "ERROR" "Не удалось перезапустить 3x-ui"
-        mv "${xui_config}.backup" "$xui_config"
-        systemctl restart x-ui
-        return 1
-    fi
-}
+# Устанавливаем trap для очистки
+trap cleanup EXIT
 
 # Основная функция
 main() {
@@ -484,20 +506,6 @@ main() {
         esac
     fi
 }
-
-# Функция очистки
-cleanup() {
-    local exit_code=$?
-    log "INFO" "Завершение работы скрипта с кодом: $exit_code"
-    if [ $exit_code -ne 0 ]; then
-        log "ERROR" "Скрипт завершился с ошибкой $exit_code"
-        rollback_system
-    fi
-    exit $exit_code
-}
-
-# Устанавливаем trap для очистки
-trap cleanup EXIT
 
 # Запускаем основную функцию
 main
