@@ -498,12 +498,6 @@ EOL
 }
 
 # Проверка установки
-# Метаданные
-VERSION="2.0.41"
-SCRIPT_START_TIME="2025-02-16 11:02:02" 
-CURRENT_USER="gopnikgame"
-
-# Функция проверки установки
 verify_installation() {
     log "INFO" "=== Проверка установки DNSCrypt ==="
     local errors=0
