@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Метаданные
-VERSION="2.0.20"
-SCRIPT_START_TIME="2025-02-15 20:43:22"
+VERSION="2.0.21"
+SCRIPT_START_TIME="2025-02-16 07:39:59"
 CURRENT_USER="gopnikgame"
 
 # Константы
@@ -38,20 +38,15 @@ log() {
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local caller_info=""
     
-    # Получаем информацию о вызывающей функции
     if [ "$level" = "DEBUG" ] || [ "$level" = "ERROR" ]; then
         local caller_function="${FUNCNAME[1]}"
         local caller_line="${BASH_LINENO[0]}"
         caller_info="($caller_function:$caller_line)"
     fi
     
-    # Форматируем сообщение лога
     local log_message="$timestamp [$level] $caller_info $message"
-    
-    # Записываем в лог-файл
     echo "$log_message" >> "$LOG_FILE"
     
-    # Выводим на экран в зависимости от уровня
     case "$level" in
         "ERROR")
             echo -e "\e[31m$log_message\e[0m" >&2
@@ -154,7 +149,6 @@ save_state() {
 check_prerequisites() {
     log "INFO" "Проверка необходимых компонентов..."
     
-    # Проверка необходимых команд
     local required_commands=("curl" "wget" "tar" "systemctl" "dig" "ss")
     local missing_commands=()
     
@@ -174,125 +168,114 @@ check_prerequisites() {
     return 0
 }
 
-# Проверка состояния системы
-check_system_state() {
-    log "INFO" "Проверка состояния системы..."
-    
-    # Проверка systemd
-    if ! pidof systemd >/dev/null; then
-        log "ERROR" "systemd не запущен"
-        return 1
-    fi
-    
-    # Проверка нагрузки системы
-    local load=$(uptime | awk -F'load average:' '{ print $2 }' | cut -d, -f1)
-    if (( $(echo "$load > 5.0" | bc -l) )); then
-        log "WARN" "Обнаружена высокая нагрузка системы: $load"
-    fi
-    
-    # Проверка доступной памяти
-    local mem_available=$(free | awk '/^Mem:/ {print $7}')
-    if [ "$mem_available" -lt 102400 ]; then
-        log "WARN" "Мало свободной памяти: $mem_available КБ"
-    fi
-    
-    # Проверка места на диске
-    local disk_space=$(df -k /usr/local/bin | awk 'NR==2 {print $4}')
-    if [ "$disk_space" -lt 102400 ]; then
-        log "ERROR" "Недостаточно места на диске: $disk_space КБ"
-        return 1
-    fi
-    
-    log "INFO" "Проверка состояния системы пройдена"
-    return 0
-}
+# Функция диагностики DNSCrypt
+diagnose_dnscrypt() {
+    log "INFO" "=== Запуск диагностики DNSCrypt ==="
+    local issues=0
 
-# Проверка порта 53
-check_port_53() {
-    log "INFO" "Проверка порта 53..."
-    
-    if ss -lntu | grep -q ':53 '; then
-        log "WARN" "Порт 53 занят"
-        
-        # Проверка systemd-resolved
-        if systemctl is-active --quiet systemd-resolved; then
-            log "INFO" "Остановка systemd-resolved..."
-            systemctl stop systemd-resolved
-            systemctl disable systemd-resolved
-        fi
-        
-        # Повторная проверка порта
-        if ss -lntu | grep -q ':53 '; then
-            log "ERROR" "Порт 53 всё ещё занят другим сервисом"
-            return 1
-        fi
-    fi
-    
-    log "INFO" "Порт 53 доступен"
-    return 0
-}
+    echo
+    echo "🔍 Начинаю комплексную проверку DNSCrypt..."
+    echo
 
-# Создание резервной копии
-create_backup() {
-    log "INFO" "Создание резервной копии..."
-    
-    mkdir -p "$BACKUP_DIR"
-    
-    # Резервное копирование DNS конфигурации
-    if [ -f "/etc/resolv.conf" ]; then
-        cp -p "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
+    # 1. Проверка службы DNSCrypt
+    echo "1️⃣ Проверка статуса службы DNSCrypt:"
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        echo "✅ Служба DNSCrypt активна и работает"
+        
+        # Получение времени работы службы
+        local uptime=$(systemctl show dnscrypt-proxy --property=ActiveEnterTimestamp | cut -d'=' -f2)
+        echo "ℹ️ Время работы с: $uptime"
+    else
+        echo "❌ Служба DNSCrypt не запущена!"
+        systemctl status dnscrypt-proxy
+        issues=$((issues + 1))
     fi
-    
-    # Резервное копирование конфигурации systemd-resolved
-    if [ -f "/etc/systemd/resolved.conf" ]; then
-        cp -p "/etc/systemd/resolved.conf" "${BACKUP_DIR}/resolved.conf.backup"
-    fi
-    
-    # Резервное копирование существующей конфигурации DNSCrypt
+    echo
+
+    # 2. Проверка текущего DNS сервера
+    echo "2️⃣ Проверка текущего DNS сервера:"
     if [ -f "$DNSCRYPT_CONFIG" ]; then
-        cp -p "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy.toml.backup"
+        local current_server=$(grep "server_names" "$DNSCRYPT_CONFIG" | cut -d"'" -f2)
+        echo "ℹ️ Текущий DNS сервер: $current_server"
+        
+        # Получение статистики использования
+        if [ -f "/var/log/dnscrypt-proxy/dnscrypt-proxy.log" ]; then
+            echo "📊 Статистика запросов:"
+            tail -n 50 /var/log/dnscrypt-proxy/dnscrypt-proxy.log | grep -i "server" | tail -n 5
+        fi
+    else
+        echo "❌ Конфигурационный файл DNSCrypt не найден!"
+        issues=$((issues + 1))
     fi
-    
-    # Резервное копирование конфигурации 3x-ui
-    if [ -f "/usr/local/x-ui/config.json" ]; then
-        cp -p "/usr/local/x-ui/config.json" "${BACKUP_DIR}/x-ui-config.json.backup"
-    fi
-    
-    log "INFO" "Резервная копия создана в $BACKUP_DIR"
-    return 0
-}
+    echo
 
-# Откат системы
-rollback_system() {
-    log "INFO" "=== Начало отката системы ==="
+    # 3. Тестирование разрешения имён
+    echo "3️⃣ Тест разрешения доменных имён:"
+    local test_domains=("google.com" "cloudflare.com" "github.com")
     
-    # Остановка сервисов
-    log "INFO" "Откат установки DNSCrypt-proxy..."
-    systemctl stop dnscrypt-proxy 2>/dev/null || true
-    systemctl disable dnscrypt-proxy 2>/dev/null || true
-    
-    # Удаление файлов
-    rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null || true
-    rm -rf "/etc/dnscrypt-proxy" 2>/dev/null || true
-    rm -rf "$DNSCRYPT_CACHE_DIR" 2>/dev/null || true
-    
-    # Восстановление конфигурации системы
-    log "INFO" "Восстановление конфигурации системы..."
-    if [ -f "${BACKUP_DIR}/resolv.conf.backup" ]; then
-        cp -f "${BACKUP_DIR}/resolv.conf.backup" "/etc/resolv.conf"
+    for domain in "${test_domains[@]}"; do
+        echo -n "🌐 Тестирование $domain: "
+        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
+            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats | grep "Query time" | cut -d':' -f2-)
+            echo "✅ OK $resolve_time"
+        else
+            echo "❌ Ошибка разрешения"
+            issues=$((issues + 1))
+        fi
+    done
+    echo
+
+    # 4. Проверка подключения к интернету
+    echo "4️⃣ Проверка доступа в интернет:"
+    if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+        echo "✅ Интернет-соединение работает"
+    else
+        echo "❌ Проблемы с интернет-соединением"
+        issues=$((issues + 1))
     fi
-    
-    # Восстановление DNS сервисов
-    log "INFO" "Восстановление DNS сервисов..."
-    if systemctl is-enabled --quiet systemd-resolved 2>/dev/null; then
-        systemctl start systemd-resolved
-        systemctl enable systemd-resolved
+    echo
+
+    # 5. Проверка логов на наличие ошибок
+    echo "5️⃣ Анализ логов DNSCrypt:"
+    if [ -f "/var/log/dnscrypt-proxy/dnscrypt-proxy.log" ]; then
+        local errors=$(grep -i "error\|failed\|warning" /var/log/dnscrypt-proxy/dnscrypt-proxy.log | tail -n 5)
+        if [ -n "$errors" ]; then
+            echo "⚠️ Последние ошибки в логах:"
+            echo "$errors"
+            issues=$((issues + 1))
+        else
+            echo "✅ Ошибок в логах не обнаружено"
+        fi
+    else
+        echo "❌ Лог-файл не найден"
+        issues=$((issues + 1))
     fi
-    
-    # Удаление файла состояния
-    rm -f "$STATE_FILE" 2>/dev/null || true
-    
-    log "INFO" "Откат системы завершён"
+    echo
+
+    # 6. Проверка конфигурации
+    echo "6️⃣ Проверка конфигурации DNSCrypt:"
+    if [ -f "$DNSCRYPT_CONFIG" ]; then
+        echo "📄 Текущие настройки:"
+        grep -E "server_names|listen_addresses|require_dnssec|require_nolog|cache" "$DNSCRYPT_CONFIG" | while read -r line; do
+            echo "   $line"
+        done
+    else
+        echo "❌ Файл конфигурации не найден"
+        issues=$((issues + 1))
+    fi
+    echo
+
+    # Итоговый отчёт
+    echo "=== Результаты диагностики ==="
+    if [ $issues -eq 0 ]; then
+        echo "✅ Все проверки пройдены успешно!"
+    else
+        echo "⚠️ Обнаружено проблем: $issues"
+        echo "📋 Рекомендации:"
+        echo "   1. Проверьте логи: /var/log/dnscrypt-proxy/dnscrypt-proxy.log"
+        echo "   2. Проверьте конфигурацию: $DNSCRYPT_CONFIG"
+        echo "   3. При необходимости перезапустите службу: systemctl restart dnscrypt-proxy"
+    fi
 }
 
 # Изменение DNS сервера
@@ -326,12 +309,10 @@ change_dns_server() {
            return 1;;
     esac
     
-    # Создаём резервную копию
     cp "$DNSCRYPT_CONFIG" "${DNSCRYPT_CONFIG}.backup"
     
     log "INFO" "Обновление конфигурации DNSCrypt для использования $server_name..."
     
-    # Создаём новую конфигурацию
     cat > "$DNSCRYPT_CONFIG" << EOL
 server_names = ['${selected_server}']
 listen_addresses = ['127.0.0.1:53']
@@ -363,24 +344,20 @@ cache_neg_max_ttl = 600
   prefix = ''
 EOL
 
-    # Перезапускаем службу DNSCrypt
     systemctl restart dnscrypt-proxy
     
-    # Проверяем новую конфигурацию
     if systemctl is-active --quiet dnscrypt-proxy; then
         if dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
             log "SUCCESS" "DNS сервер успешно изменён на $server_name"
             return 0
         else
             log "ERROR" "Тест разрешения DNS не пройден"
-            # Восстанавливаем backup
             mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
             systemctl restart dnscrypt-proxy
             return 1
         fi
     else
         log "ERROR" "Служба DNSCrypt не запустилась"
-        # Восстанавливаем backup
         mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
         systemctl restart dnscrypt-proxy
         return 1
@@ -454,9 +431,10 @@ main() {
         echo "DNSCrypt установлен. Выберите действие:"
         echo "1) Изменить DNS сервер"
         echo "2) Настроить интеграцию с 3x-ui"
-        echo "3) Выход"
+        echo "3) Запустить диагностику DNSCrypt"
+        echo "4) Выход"
         echo
-        read -p "Выберите действие (1-3): " option
+        read -p "Выберите действие (1-4): " option
         echo
         
         case $option in
@@ -465,8 +443,7 @@ main() {
                 ;;
             2)
                 if ! check_3xui_installed; then
-                    log "ERROR" "3x-ui не установлен"
-                    log "INFO" "Установите 3x-ui командой:"
+                    log "ERROR" "3x-ui не установлен. Установите 3x-ui командой:"
                     log "INFO" "bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
                     exit 1
                 fi
@@ -494,6 +471,9 @@ main() {
                 fi
                 ;;
             3)
+                diagnose_dnscrypt
+                ;;
+            4)
                 log "INFO" "Выход из программы..."
                 exit 0
                 ;;
