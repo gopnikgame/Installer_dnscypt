@@ -19,13 +19,6 @@ log() {
     echo -e "${timestamp} [$1] $2"
 }
 
-# Функция для создания резервной копии
-backup_config() {
-    mkdir -p "$BACKUP_DIR"
-    cp "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy_${TIMESTAMP}.toml"
-    log "INFO" "Создана резервная копия конфигурации"
-}
-
 # Функция для проверки текущих настроек
 check_current_settings() {
     log "INFO" "=== Текущие настройки DNSCrypt ==="
@@ -66,16 +59,12 @@ check_current_settings() {
 
 # Функция для проверки применения настроек
 verify_settings() {
-    local server_name=$1
+    local server_name="$1"
     log "INFO" "Проверка применения настроек..."
     
-    # Перезапуск службы
-    systemctl restart dnscrypt-proxy
-    sleep 2
-
     # Проверка статуса службы
     if ! systemctl is-active --quiet dnscrypt-proxy; then
-        log "ERROR" "Служба DNSCrypt не запущена после изменения настроек"
+        log "ERROR" "Служба DNSCrypt не запущена"
         return 1
     fi
 
@@ -106,24 +95,31 @@ verify_settings() {
     local current_server=$(dig +short resolver.dnscrypt.info TXT | grep -o '".*"' | tr -d '"')
     if [ -n "$current_server" ]; then
         echo "Активный сервер: $current_server"
-        if [[ "$current_server" == *"$server_name"* ]]; then
-            echo -e "${GREEN}✓ Настройки применены успешно${NC}"
-        else
-            echo -e "${YELLOW}⚠ Активный сервер отличается от выбранного${NC}"
-        fi
     else
-        echo -e "${RED}✗ Не удалось определить активный сервер${NC}"
+        echo -e "${RED}Не удалось определить активный сервер${NC}"
+        success=false
     fi
 
-    return $success
+    if [ "$success" = true ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Функция для создания резервной копии
+backup_config() {
+    mkdir -p "$BACKUP_DIR"
+    cp "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy_${TIMESTAMP}.toml"
+    log "INFO" "Создана резервная копия конфигурации"
 }
 
 # Функция для применения новых настроек
 apply_settings() {
-    local server_name=$1
-    local dnssec=$2
-    local nolog=$3
-    local nofilter=$4
+    local server_name="$1"
+    local dnssec="$2"
+    local nolog="$3"
+    local nofilter="$4"
 
     backup_config
 
@@ -134,6 +130,11 @@ apply_settings() {
     sed -i "s/require_nofilter = .*/require_nofilter = $nofilter/" "$DNSCRYPT_CONFIG"
 
     log "INFO" "Настройки обновлены"
+    
+    # Перезапуск службы
+    systemctl restart dnscrypt-proxy
+    sleep 2
+
     verify_settings "$server_name"
 }
 
@@ -145,7 +146,7 @@ change_dns() {
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
         log "ERROR" "Файл конфигурации DNSCrypt не найден"
         return 1
-    }
+    fi
 
     # Показать текущие настройки
     check_current_settings
