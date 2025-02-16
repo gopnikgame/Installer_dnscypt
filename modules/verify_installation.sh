@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Константы
+DNSCRYPT_BINARY="/usr/local/bin/dnscrypt-proxy"
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
-DNSCRYPT_BINARY="/usr/sbin/dnscrypt-proxy"
-RESOLVED_CONFIG="/etc/systemd/resolved.conf"
+SERVICE_NAME="dnscrypt-proxy.service"
 
 # Цветовые коды
 RED="\033[0;31m"
@@ -18,45 +18,6 @@ log() {
     echo -e "${timestamp} [$1] $2"
 }
 
-# Функция проверки и исправления systemd-resolved
-check_and_fix_resolved() {
-    if systemctl is-active --quiet systemd-resolved; then
-        log "INFO" "Обнаружен активный systemd-resolved"
-        
-        # Проверяем настройки resolved.conf
-        if ! grep -q "DNSStubListener=no" "$RESOLVED_CONFIG"; then
-            log "INFO" "Отключаем DNSStubListener в systemd-resolved..."
-            echo "DNSStubListener=no" >> "$RESOLVED_CONFIG"
-            
-            # Перезапускаем службу
-            systemctl restart systemd-resolved
-            sleep 2
-        fi
-        
-        # Проверяем, освободился ли порт 53
-        if ! lsof -i :53 | grep -q "systemd-r"; then
-            log "SUCCESS" "Порт 53 освобожден от systemd-resolved"
-        else
-            log "ERROR" "Не удалось освободить порт 53"
-            return 1
-        fi
-    fi
-    return 0
-}
-
-# Функция проверки конфигурации DNSCrypt
-check_dnscrypt_config() {
-    local listen_address
-    listen_address=$(grep "listen_addresses" "$DNSCRYPT_CONFIG" | grep -o "'.*'" | tr -d "'")
-    
-    if [[ ! "$listen_address" =~ "127.0.0.1:53" ]]; then
-        log "INFO" "Настраиваем DNSCrypt для прослушивания порта 53..."
-        sed -i "s/listen_addresses = .*/listen_addresses = ['127.0.0.1:53']/" "$DNSCRYPT_CONFIG"
-        systemctl restart dnscrypt-proxy
-        sleep 2
-    fi
-}
-
 # Основная функция проверки
 verify_installation() {
     log "INFO" "Начало проверки установки DNSCrypt..."
@@ -67,12 +28,17 @@ verify_installation() {
         log "SUCCESS" "DNSCrypt бинарный файл найден"
         if [ -x "$DNSCRYPT_BINARY" ]; then
             log "SUCCESS" "DNSCrypt бинарный файл имеет права на выполнение"
+            # Показать версию DNSCrypt
+            local version
+            version=$("$DNSCRYPT_BINARY" --version 2>&1)
+            log "INFO" "Версия DNSCrypt: $version"
         else
             log "ERROR" "DNSCrypt бинарный файл не имеет прав на выполнение"
             ((errors++))
         fi
     else
         log "ERROR" "DNSCrypt бинарный файл не найден"
+        log "INFO" "Для установки DNSCrypt используйте пункт 1 главного меню"
         ((errors++))
     fi
 
@@ -84,50 +50,27 @@ verify_installation() {
         ((errors++))
     fi
 
-    # Проверка статуса службы
-    if systemctl is-active --quiet dnscrypt-proxy; then
+    # Проверка службы
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
         log "SUCCESS" "Служба DNSCrypt активна"
     else
         log "ERROR" "Служба DNSCrypt не активна"
+        log "INFO" "Для управления службой используйте пункт 6 главного меню"
         ((errors++))
     fi
 
     # Проверка порта 53
-    if ! lsof -i :53 >/dev/null 2>&1; then
-        log "INFO" "Порт 53 свободен, настраиваем DNSCrypt..."
-        check_dnscrypt_config
-    elif lsof -i :53 | grep -q "dnscrypt"; then
+    if lsof -i :53 | grep -q "dnscrypt"; then
         log "SUCCESS" "DNSCrypt слушает порт 53"
     else
         log "ERROR" "DNSCrypt не слушает порт 53"
-        
-        # Предлагаем исправить
-        echo -e "\n${YELLOW}Обнаружена проблема с портом 53. Хотите попытаться исправить? (y/n)${NC}"
-        read -r fix_choice
-        if [[ "${fix_choice,,}" == "y" ]]; then
-            if check_and_fix_resolved && check_dnscrypt_config; then
-                log "SUCCESS" "Настройки применены, проверяем результат..."
-                systemctl restart dnscrypt-proxy
-                sleep 2
-                if lsof -i :53 | grep -q "dnscrypt"; then
-                    log "SUCCESS" "DNSCrypt теперь слушает порт 53"
-                else
-                    log "ERROR" "Не удалось настроить прослушивание порта 53"
-                    ((errors++))
-                fi
-            else
-                ((errors++))
-            fi
-        else
-            ((errors++))
-        fi
+        ((errors++))
     fi
 
     # Проверка DNS резолвинга
     if dig @127.0.0.1 google.com +short +timeout=5 >/dev/null 2>&1; then
         log "SUCCESS" "DNS резолвинг работает"
         
-        # Дополнительная информация о резолвинге
         echo -e "\n${BLUE}Информация о DNS резолвинге:${NC}"
         echo "Текущий DNS сервер:"
         dig +short resolver.dnscrypt.info TXT | sed 's/"//g'
@@ -148,6 +91,10 @@ verify_installation() {
         return 0
     else
         log "ERROR" "Проверка завершена. Найдено ошибок: $errors"
+        echo -e "\n${YELLOW}Для устранения ошибок:${NC}"
+        echo "1. Установка DNSCrypt - пункт 1 главного меню"
+        echo "2. Управление службой - пункт 6 главного меню"
+        echo "3. Изменение настроек DNS - пункт 3 главного меню"
         return 1
     fi
 }
