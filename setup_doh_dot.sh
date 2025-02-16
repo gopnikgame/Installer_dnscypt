@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Метаданные
-VERSION="2.0.27"
-SCRIPT_START_TIME="2025-02-16 08:53:40"
+VERSION="2.0.31"
+SCRIPT_START_TIME="2025-02-16 10:35:30"
 CURRENT_USER="gopnikgame"
 
 # Константы
@@ -120,6 +120,8 @@ setup_russian_locale() {
 save_state() {
     echo "$1" > "$STATE_FILE"
 }
+
+# Функции подготовки системы
 
 # Проверка системных требований
 check_prerequisites() {
@@ -266,212 +268,12 @@ create_backup() {
     return 0
 }
 
-# Откат системы к исходному состоянию
-rollback_system() {
-    log "INFO" "=== Начало отката системы ==="
-    
-    # Остановка и отключение DNSCrypt
-    log "INFO" "Остановка DNSCrypt..."
-    systemctl stop dnscrypt-proxy 2>/dev/null || true
-    systemctl disable dnscrypt-proxy 2>/dev/null || true
-    
-    # Удаление файлов DNSCrypt
-    log "INFO" "Удаление файлов DNSCrypt..."
-    rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null || true
-    rm -rf "/etc/dnscrypt-proxy" 2>/dev/null || true
-    rm -rf "$DNSCRYPT_CACHE_DIR" 2>/dev/null || true
-    
-    # Восстановление конфигураций из бэкапа
-    if [ -d "$BACKUP_DIR" ]; then
-        log "INFO" "Восстановление конфигураций из бэкапа..."
-        
-        if [ -f "${BACKUP_DIR}/resolv.conf.backup" ]; then
-            cp -f "${BACKUP_DIR}/resolv.conf.backup" "/etc/resolv.conf"
-        fi
-        
-        if [ -f "${BACKUP_DIR}/resolved.conf.backup" ]; then
-            cp -f "${BACKUP_DIR}/resolved.conf.backup" "/etc/systemd/resolved.conf"
-            systemctl enable systemd-resolved 2>/dev/null || true
-            systemctl start systemd-resolved 2>/dev/null || true
-        fi
-        
-        if [ -f "${BACKUP_DIR}/x-ui-config.json.backup" ]; then
-            cp -f "${BACKUP_DIR}/x-ui-config.json.backup" "/usr/local/x-ui/config.json"
-            systemctl restart x-ui 2>/dev/null || true
-        fi
-    fi
-    
-    # Удаление временных файлов
-    rm -f "$STATE_FILE" 2>/dev/null || true
-    
-    log "INFO" "Откат системы завершён"
-    
-    # Проверка DNS-резолвинга после отката
-    if ! dig @1.1.1.1 google.com +short +timeout=5 > /dev/null 2>&1; then
-        log "WARN" "После отката возможны проблемы с DNS. Проверьте настройки сети"
-    fi
-}
 
-# Изменение DNS сервера
-change_dns_server() {
-    log "INFO" "=== Изменение DNS сервера ==="
-    
-    echo
-    echo "Доступные DNS серверы:"
-    echo "1) Cloudflare DNS (Быстрый, ориентирован на приватность)"
-    echo "2) Quad9 (Повышенная безопасность, блокировка вредоносных доменов)"
-    echo "3) OpenDNS (Семейный фильтр, блокировка нежелательного контента)"
-    echo "4) AdGuard DNS (Блокировка рекламы и трекеров)"
-    echo "5) Anonymous Montreal (Анонимный релей через Канаду)"
-    echo
-    
-    read -p "Выберите DNS сервер (1-5): " dns_choice
-    echo
-    
-    case $dns_choice in
-        1) selected_server="${DNS_SERVERS[Cloudflare]}"
-           server_name="Cloudflare DNS";;
-        2) selected_server="${DNS_SERVERS[Quad9]}"
-           server_name="Quad9";;
-        3) selected_server="${DNS_SERVERS[OpenDNS]}"
-           server_name="OpenDNS";;
-        4) selected_server="${DNS_SERVERS[AdGuard]}"
-           server_name="AdGuard DNS";;
-        5) selected_server="${DNS_SERVERS[Anonymous Montreal]}"
-           server_name="Anonymous Montreal";;
-        *) log "ERROR" "Неверный выбор"
-           return 1;;
-    esac
-    
-    cp "$DNSCRYPT_CONFIG" "${DNSCRYPT_CONFIG}.backup"
-    sed -i "s/server_names = \\[[^]]*\\]/server_names = ['${selected_server}']/g" "$DNSCRYPT_CONFIG"
-    
-    systemctl restart dnscrypt-proxy
-    
-    if systemctl is-active --quiet dnscrypt-proxy; then
-        if dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
-            log "SUCCESS" "DNS сервер успешно изменён на $server_name"
-            return 0
-        else
-            log "ERROR" "Тест разрешения DNS не пройден"
-            mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
-            systemctl restart dnscrypt-proxy
-            return 1
-        fi
-    else
-        log "ERROR" "Служба DNSCrypt не запустилась"
-        mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
-        systemctl restart dnscrypt-proxy
-        return 1
-    fi
-}
-
-# Настройка DNS для 3x-ui
-configure_3xui_dns() {
-    log "INFO" "=== Настройка DNS для 3x-ui ==="
-    
-    local xui_config="/usr/local/x-ui/config.json"
-    
-    if [ ! -f "$xui_config" ]; then
-        log "ERROR" "Конфигурационный файл 3x-ui не найден"
-        return 1
-    fi
-    
-    cp "$xui_config" "${xui_config}.backup"
-    
-    local current_dns=$(grep -o '"dns_server":"[^"]*"' "$xui_config" | cut -d'"' -f4)
-    log "INFO" "Текущий DNS сервер в 3x-ui: $current_dns"
-    
-    sed -i 's/"dns_server":"[^"]*"/"dns_server":"127.0.0.1"/' "$xui_config"
-    
-    systemctl restart x-ui
-    
-    if systemctl is-active --quiet x-ui; then
-        log "SUCCESS" "Настройка DNS для 3x-ui выполнена успешно"
-        return 0
-    else
-        log "ERROR" "Не удалось перезапустить 3x-ui"
-        mv "${xui_config}.backup" "$xui_config"
-        systemctl restart x-ui
-        return 1
-    fi
-}
-
-# Диагностика DNSCrypt
-diagnose_dnscrypt() {
-    log "INFO" "=== Запуск диагностики DNSCrypt ==="
-    local issues=0
-    
-    echo
-    echo "🔍 Начинаю комплексную проверку DNSCrypt..."
-    echo
-    
-    # Проверка службы
-    echo "1️⃣ Проверка статуса службы DNSCrypt:"
-    if systemctl is-active --quiet dnscrypt-proxy; then
-        local uptime=$(systemctl show dnscrypt-proxy --property=ActiveEnterTimestamp | cut -d'=' -f2)
-        echo "✅ Служба DNSCrypt активна"
-        echo "ℹ️ Время работы с: $uptime"
-    else
-        echo "❌ Служба DNSCrypt не запущена!"
-        systemctl status dnscrypt-proxy
-        issues=$((issues + 1))
-    fi
-    
-    # Проверка конфигурации
-    echo -e "\n2️⃣ Проверка конфигурации:"
-    if [ -f "$DNSCRYPT_CONFIG" ]; then
-        echo "✅ Конфигурационный файл найден"
-        local current_server=$(grep "server_names" "$DNSCRYPT_CONFIG" | cut -d"'" -f2)
-        echo "ℹ️ Текущий DNS сервер: $current_server"
-    else
-        echo "❌ Конфигурационный файл отсутствует!"
-        issues=$((issues + 1))
-    fi
-    
-    # Тест разрешения имён
-    echo -e "\n3️⃣ Тест разрешения доменных имён:"
-    local test_domains=("google.com" "cloudflare.com" "github.com")
-    for domain in "${test_domains[@]}"; do
-        echo -n "🌐 Тестирование $domain: "
-        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null; then
-            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats | grep "Query time" | cut -d':' -f2-)
-            echo "✅ OK$resolve_time"
-        else
-            echo "❌ Ошибка"
-            issues=$((issues + 1))
-        fi
-    done
-    
-    # Итоговый отчёт
-    echo -e "\n=== Результаты диагностики ==="
-    if [ $issues -eq 0 ]; then
-        log "SUCCESS" "Все проверки пройдены успешно!"
-    else
-        log "WARN" "Обнаружено проблем: $issues"
-        echo "📋 Рекомендации:"
-        echo "   1. Проверьте логи: /var/log/dnscrypt-proxy/dnscrypt-proxy.log"
-        echo "   2. Проверьте конфигурацию: $DNSCRYPT_CONFIG"
-        echo "   3. При необходимости перезапустите службу: systemctl restart dnscrypt-proxy"
-    fi
-}
-
-# Проверка установки DNSCrypt
-check_dnscrypt_installed() {
-    log "INFO" "Проверка установки DNSCrypt..."
-    if [ -f "$DNSCRYPT_BIN_PATH" ] && systemctl is-active --quiet dnscrypt-proxy; then
-        log "INFO" "DNSCrypt установлен и работает"
-        return 0
-    else
-        log "INFO" "DNSCrypt не установлен"
-        return 1
-    fi
-}
 # Установка DNSCrypt
 install_dnscrypt() {
     log "INFO" "=== Установка DNSCrypt ==="
     local installation_steps=0
-    local total_steps=8  # Увеличили на 1 шаг для установки capabilities
+    local total_steps=8
     
     # Шаг 1: Создание пользователя и группы
     log "INFO" "(Шаг 1/$total_steps) Создание системного пользователя и группы..."
@@ -642,7 +444,6 @@ EOL
     
     # Запуск службы с проверкой
     if systemctl start dnscrypt-proxy; then
-        # Ждем 10 секунд, чтобы служба полностью запустилась
         sleep 10
         if systemctl is-active --quiet dnscrypt-proxy; then
             installation_steps=$((installation_steps + 1))
@@ -810,6 +611,209 @@ verify_installation() {
         return 1
     fi
 }
+
+
+# Откат системы к исходному состоянию
+rollback_system() {
+    log "INFO" "=== Начало отката системы ==="
+    
+    # Остановка и отключение DNSCrypt
+    log "INFO" "Остановка DNSCrypt..."
+    systemctl stop dnscrypt-proxy 2>/dev/null || true
+    systemctl disable dnscrypt-proxy 2>/dev/null || true
+    
+    # Удаление файлов DNSCrypt
+    log "INFO" "Удаление файлов DNSCrypt..."
+    rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null || true
+    rm -rf "/etc/dnscrypt-proxy" 2>/dev/null || true
+    rm -rf "$DNSCRYPT_CACHE_DIR" 2>/dev/null || true
+    
+    # Восстановление конфигураций из бэкапа
+    if [ -d "$BACKUP_DIR" ]; then
+        log "INFO" "Восстановление конфигураций из бэкапа..."
+        
+        if [ -f "${BACKUP_DIR}/resolv.conf.backup" ]; then
+            cp -f "${BACKUP_DIR}/resolv.conf.backup" "/etc/resolv.conf"
+        fi
+        
+        if [ -f "${BACKUP_DIR}/resolved.conf.backup" ]; then
+            cp -f "${BACKUP_DIR}/resolved.conf.backup" "/etc/systemd/resolved.conf"
+            systemctl enable systemd-resolved 2>/dev/null || true
+            systemctl start systemd-resolved 2>/dev/null || true
+        fi
+        
+        if [ -f "${BACKUP_DIR}/x-ui-config.json.backup" ]; then
+            cp -f "${BACKUP_DIR}/x-ui-config.json.backup" "/usr/local/x-ui/config.json"
+            systemctl restart x-ui 2>/dev/null || true
+        fi
+    fi
+    
+    # Удаление временных файлов
+    rm -f "$STATE_FILE" 2>/dev/null || true
+    
+    log "INFO" "Откат системы завершён"
+    
+    # Проверка DNS-резолвинга после отката
+    if ! dig @1.1.1.1 google.com +short +timeout=5 > /dev/null 2>&1; then
+        log "WARN" "После отката возможны проблемы с DNS. Проверьте настройки сети"
+    fi
+}
+
+# Изменение DNS сервера
+change_dns_server() {
+    log "INFO" "=== Изменение DNS сервера ==="
+    
+    echo
+    echo "Доступные DNS серверы:"
+    echo "1) Cloudflare DNS (Быстрый, ориентирован на приватность)"
+    echo "2) Quad9 (Повышенная безопасность, блокировка вредоносных доменов)"
+    echo "3) OpenDNS (Семейный фильтр, блокировка нежелательного контента)"
+    echo "4) AdGuard DNS (Блокировка рекламы и трекеров)"
+    echo "5) Anonymous Montreal (Анонимный релей через Канаду)"
+    echo
+    
+    read -p "Выберите DNS сервер (1-5): " dns_choice
+    echo
+    
+    case $dns_choice in
+        1) selected_server="${DNS_SERVERS[Cloudflare]}"
+           server_name="Cloudflare DNS";;
+        2) selected_server="${DNS_SERVERS[Quad9]}"
+           server_name="Quad9";;
+        3) selected_server="${DNS_SERVERS[OpenDNS]}"
+           server_name="OpenDNS";;
+        4) selected_server="${DNS_SERVERS[AdGuard]}"
+           server_name="AdGuard DNS";;
+        5) selected_server="${DNS_SERVERS[Anonymous Montreal]}"
+           server_name="Anonymous Montreal";;
+        *) log "ERROR" "Неверный выбор"
+           return 1;;
+    esac
+    
+    cp "$DNSCRYPT_CONFIG" "${DNSCRYPT_CONFIG}.backup"
+    sed -i "s/server_names = \\[[^]]*\\]/server_names = ['${selected_server}']/g" "$DNSCRYPT_CONFIG"
+    
+    systemctl restart dnscrypt-proxy
+    
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        if dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
+            log "SUCCESS" "DNS сервер успешно изменён на $server_name"
+            return 0
+        else
+            log "ERROR" "Тест разрешения DNS не пройден"
+            mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
+            systemctl restart dnscrypt-proxy
+            return 1
+        fi
+    else
+        log "ERROR" "Служба DNSCrypt не запустилась"
+        mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
+        systemctl restart dnscrypt-proxy
+        return 1
+    fi
+}
+
+# Настройка DNS для 3x-ui
+configure_3xui_dns() {
+    log "INFO" "=== Настройка DNS для 3x-ui ==="
+    
+    local xui_config="/usr/local/x-ui/config.json"
+    
+    if [ ! -f "$xui_config" ]; then
+        log "ERROR" "Конфигурационный файл 3x-ui не найден"
+        return 1
+    fi
+    
+    cp "$xui_config" "${xui_config}.backup"
+    
+    local current_dns=$(grep -o '"dns_server":"[^"]*"' "$xui_config" | cut -d'"' -f4)
+    log "INFO" "Текущий DNS сервер в 3x-ui: $current_dns"
+    
+    sed -i 's/"dns_server":"[^"]*"/"dns_server":"127.0.0.1"/' "$xui_config"
+    
+    systemctl restart x-ui
+    
+    if systemctl is-active --quiet x-ui; then
+        log "SUCCESS" "Настройка DNS для 3x-ui выполнена успешно"
+        return 0
+    else
+        log "ERROR" "Не удалось перезапустить 3x-ui"
+        mv "${xui_config}.backup" "$xui_config"
+        systemctl restart x-ui
+        return 1
+    fi
+}
+
+# Диагностика DNSCrypt
+diagnose_dnscrypt() {
+    log "INFO" "=== Запуск диагностики DNSCrypt ==="
+    local issues=0
+    
+    echo
+    echo "🔍 Начинаю комплексную проверку DNSCrypt..."
+    echo
+    
+    # Проверка службы
+    echo "1️⃣ Проверка статуса службы DNSCrypt:"
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        local uptime=$(systemctl show dnscrypt-proxy --property=ActiveEnterTimestamp | cut -d'=' -f2)
+        echo "✅ Служба DNSCrypt активна"
+        echo "ℹ️ Время работы с: $uptime"
+    else
+        echo "❌ Служба DNSCrypt не запущена!"
+        systemctl status dnscrypt-proxy
+        issues=$((issues + 1))
+    fi
+        # Проверка конфигурации
+    echo -e "\n2️⃣ Проверка конфигурации:"
+    if [ -f "$DNSCRYPT_CONFIG" ]; then
+        echo "✅ Конфигурационный файл найден"
+        local current_server=$(grep "server_names" "$DNSCRYPT_CONFIG" | cut -d"'" -f2)
+        echo "ℹ️ Текущий DNS сервер: $current_server"
+    else
+        echo "❌ Конфигурационный файл отсутствует!"
+        issues=$((issues + 1))
+    fi
+    
+    # Тест разрешения имён
+    echo -e "\n3️⃣ Тест разрешения доменных имён:"
+    local test_domains=("google.com" "cloudflare.com" "github.com")
+    for domain in "${test_domains[@]}"; do
+        echo -n "🌐 Тестирование $domain: "
+        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null; then
+            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats | grep "Query time" | cut -d':' -f2-)
+            echo "✅ OK$resolve_time"
+        else
+            echo "❌ Ошибка"
+            issues=$((issues + 1))
+        fi
+    done
+    
+    # Итоговый отчёт
+    echo -e "\n=== Результаты диагностики ==="
+    if [ $issues -eq 0 ]; then
+        log "SUCCESS" "Все проверки пройдены успешно!"
+    else
+        log "WARN" "Обнаружено проблем: $issues"
+        echo "📋 Рекомендации:"
+        echo "   1. Проверьте логи: /var/log/dnscrypt-proxy/dnscrypt-proxy.log"
+        echo "   2. Проверьте конфигурацию: $DNSCRYPT_CONFIG"
+        echo "   3. При необходимости перезапустите службу: systemctl restart dnscrypt-proxy"
+    fi
+}
+
+# Проверка установки DNSCrypt
+check_dnscrypt_installed() {
+    log "INFO" "Проверка установки DNSCrypt..."
+    if [ -f "$DNSCRYPT_BIN_PATH" ] && systemctl is-active --quiet dnscrypt-proxy; then
+        log "INFO" "DNSCrypt установлен и работает"
+        return 0
+    else
+        log "INFO" "DNSCrypt не установлен"
+        return 1
+    fi
+}
+
 # Проверка установки 3x-ui
 check_3xui_installed() {
     log "INFO" "Проверка установки 3x-ui..."
@@ -836,28 +840,62 @@ cleanup() {
 # Устанавливаем trap для очистки
 trap cleanup EXIT
 
+# Метаданные
+VERSION="2.0.38"
+SCRIPT_START_TIME="2025-02-16 10:48:33"
+CURRENT_USER="gopnikgame"
+
 # Основная функция
 main() {
-    log "INFO" "Запуск скрипта (Версия: $VERSION)"
+    log "INFO" "=== DNSCrypt Installer v$VERSION ==="
     log "INFO" "Время запуска: $SCRIPT_START_TIME"
-    log "INFO" "Текущий пользователь: $CURRENT_USER"
+    log "INFO" "Пользователь: $CURRENT_USER"
     
-    check_root || exit 1
-    setup_russian_locale || log "WARN" "Продолжаем работу без русской локали"
+    # Проверка root прав
+    check_root || {
+        log "ERROR" "Скрипт должен быть запущен с правами root"
+        exit 1
+    }
     
+    # Настройка русской локали
+    setup_russian_locale || {
+        log "WARN" "Не удалось установить русскую локаль, продолжаем работу..."
+    }
+    
+    # Проверка наличия установленного DNSCrypt
     if ! check_dnscrypt_installed; then
-        log "INFO" "DNSCrypt не установлен, начинаем установку..."
-        check_prerequisites || exit 1
-        check_system_state || exit 1
-        check_port_53 || exit 1
-        create_backup || exit 1
+        log "INFO" "DNSCrypt не установлен. Начинаем процесс установки..."
         
+        # Предварительные проверки
+        check_prerequisites || {
+            log "ERROR" "Не удалось выполнить предварительные проверки"
+            exit 1
+        }
+        
+        check_system_state || {
+            log "ERROR" "Система не готова к установке"
+            exit 1
+        }
+        
+        check_port_53 || {
+            log "ERROR" "Не удалось освободить порт 53"
+            exit 1
+        }
+        
+        # Создание резервных копий
+        create_backup || {
+            log "ERROR" "Не удалось создать резервные копии"
+            exit 1
+        }
+        
+        # Установка DNSCrypt
         if ! install_dnscrypt; then
-            log "ERROR" "Установка не удалась"
+            log "ERROR" "Установка DNSCrypt не удалась"
             rollback_system
             exit 1
         fi
         
+        # Проверка установки
         if ! verify_installation; then
             log "ERROR" "Проверка установки не удалась"
             rollback_system
@@ -865,66 +903,79 @@ main() {
         fi
         
         log "SUCCESS" "Установка DNSCrypt успешно завершена"
-        log "INFO" "Перезапустите скрипт для настройки интеграции с 3x-ui"
+        log "INFO" "Для настройки интеграции с 3x-ui перезапустите скрипт"
         return 0
     fi
     
-    echo
-    echo "DNSCrypt установлен. Выберите действие:"
-    echo "1) Изменить DNS сервер"
-    echo "2) Настроить интеграцию с 3x-ui"
-    echo "3) Запустить диагностику DNSCrypt"
-    echo "4) Выход"
-    echo
-    read -p "Выберите действие (1-4): " option
-    echo
-    
-    case $option in
-        1)
-            change_dns_server
-            ;;
-        2)
-            if ! check_3xui_installed; then
-                log "ERROR" "3x-ui не установлен. Установите 3x-ui командой:"
-                log "INFO" "bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
-                exit 1
-            fi
-            
-            echo "Настроить 3x-ui для работы через DNSCrypt?"
-            echo "Будет выполнено:"
-            echo "1. Обновление настроек DNS в 3x-ui на localhost (127.0.0.1)"
-            echo "2. Перезапуск службы 3x-ui"
-            echo "3. Создание резервной копии настроек"
-            echo
-            read -p "Продолжить? (д/н): " -n 1 -r
-            echo
-            
-            if [[ $REPLY =~ ^[ДдYy]$ ]]; then
-                if configure_3xui_dns; then
-                    log "SUCCESS" "3x-ui успешно настроен"
-                    log "INFO" "Настройка завершена!"
-                else
-                    log "ERROR" "Ошибка настройки DNS для 3x-ui"
-                    exit 1
+    # Если DNSCrypt уже установлен, показываем меню
+    while true; do
+        echo
+        echo "════════════════════════════════════"
+        echo "           МЕНЮ УПРАВЛЕНИЯ          "
+        echo "════════════════════════════════════"
+        echo "1) Изменить DNS сервер"
+        echo "2) Настроить интеграцию с 3x-ui"
+        echo "3) Запустить диагностику DNSCrypt"
+        echo "4) Выход"
+        echo "════════════════════════════════════"
+        echo
+        read -p "Выберите действие (1-4): " option
+        echo
+        
+        case $option in
+            1)
+                if ! change_dns_server; then
+                    log "ERROR" "Не удалось изменить DNS сервер"
+                    continue
                 fi
-            else
-                log "INFO" "Настройка отменена пользователем"
+                ;;
+            2)
+                if ! check_3xui_installed; then
+                    log "ERROR" "3x-ui не установлен"
+                    echo
+                    log "INFO" "Для установки 3x-ui выполните команду:"
+                    echo "bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
+                    continue
+                fi
+                
+                echo "Настройка интеграции с 3x-ui"
+                echo "═══════════════════════════════"
+                echo "Будет выполнено:"
+                echo "1. Обновление DNS настроек в 3x-ui на 127.0.0.1"
+                echo "2. Создание резервной копии конфигурации"
+                echo "3. Перезапуск службы 3x-ui"
+                echo
+                read -p "Продолжить? (д/н): " -n 1 -r
+                echo
+                
+                if [[ $REPLY =~ ^[ДдYy]$ ]]; then
+                    if configure_3xui_dns; then
+                        log "SUCCESS" "Интеграция с 3x-ui настроена успешно"
+                    else
+                        log "ERROR" "Ошибка настройки интеграции с 3x-ui"
+                    fi
+                else
+                    log "INFO" "Настройка отменена пользователем"
+                fi
+                ;;
+            3)
+                diagnose_dnscrypt
+                ;;
+            4)
+                log "INFO" "Завершение работы..."
                 exit 0
-            fi
-            ;;
-        3)
-            diagnose_dnscrypt
-            ;;
-        4)
-            log "INFO" "Выход из программы..."
-            exit 0
-            ;;
-        *)
-            log "ERROR" "Неверный выбор"
-            exit 1
-            ;;
-    esac
+                ;;
+            *)
+                log "ERROR" "Неверный выбор. Пожалуйста, выберите пункт от 1 до 4"
+                continue
+                ;;
+        esac
+        
+        # Пауза после выполнения действия
+        echo
+        read -p "Нажмите Enter для продолжения..."
+    done
 }
 
-# Запускаем основную функцию
+# Запуск основной функции
 main
