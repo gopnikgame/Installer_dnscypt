@@ -6,8 +6,18 @@
 
 ## 🚀 Быстрая установка
 
+### Вариант 1 (в два шага):
 ```bash
-wget -O - https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/quick_install.sh | sudo bash
+# Шаг 1: Скачать скрипт установки
+wget https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/quick_install.sh -O quick_install.sh
+
+# Шаг 2: Запустить скрипт
+sudo bash quick_install.sh
+```
+
+### Вариант 2 (в одну команду):
+```bash
+sudo bash -c "$(wget -O - https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/quick_install.sh)"
 ```
 
 Или пошагово:
