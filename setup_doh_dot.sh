@@ -2,12 +2,12 @@
 #
 # DNSCrypt Installer & Manager
 # Author: gopnikgame
-# Version: 2.0.44
-# Last update: 2025-02-16 11:39:48
+# Version: 2.0.55
+# Last update: 2025-02-16 13:18:43
 
 # Метаданные
-VERSION="2.0.44"
-SCRIPT_START_TIME="2025-02-16 11:39:48"
+VERSION="2.0.55"
+SCRIPT_START_TIME="2025-02-16 13:18:43"
 CURRENT_USER="gopnikgame"
 
 # Константы
@@ -27,13 +27,49 @@ declare -A DNS_SERVERS=(
     ["Anonymous Montreal"]="anon-montreal"
 )
 
-# 2. Базовые функции логирования и утилит
+# Обработка прерываний и выхода
+trap 'cleanup' EXIT
+trap 'cleanup_interrupt' INT TERM
+# Базовые функции и обработчики ошибок
+
+# Функция логирования
 log() {
     local level=$1
     shift
     local message=$@
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     echo -e "$timestamp [$level] $message"
+}
+
+# Функция очистки при выходе
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        log "ERROR" "(cleanup:${BASH_LINENO[0]}) Скрипт завершился с ошибкой $exit_code"
+        if [ -f "$STATE_FILE" ]; then
+            log "INFO" "=== Начало отката системы ==="
+            log "INFO" "Остановка DNSCrypt..."
+            systemctl stop dnscrypt-proxy 2>/dev/null
+            log "INFO" "Удаление файлов DNSCrypt..."
+            rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null
+            rm -rf "/etc/dnscrypt-proxy" 2>/dev/null
+            rollback_system
+            log "INFO" "Откат системы завершён"
+        fi
+    fi
+    rm -f "$STATE_FILE" 2>/dev/null
+}
+
+# Функция обработки прерывания
+cleanup_interrupt() {
+    log "WARN" "Получен сигнал прерывания"
+    cleanup
+    exit 1
+}
+
+# Функция для отслеживания состояния установки
+mark_state() {
+    echo "$1" > "$STATE_FILE"
 }
 
 # Функция проверки root прав
@@ -63,7 +99,6 @@ setup_russian_locale() {
 create_backup() {
     log "INFO" "Создание резервной копии..."
     
-    # Создаем директорию для бэкапа если её нет
     mkdir -p "$BACKUP_DIR"
     
     # Бэкап resolv.conf
@@ -71,17 +106,17 @@ create_backup() {
         cp "/etc/resolv.conf" "$BACKUP_DIR/resolv.conf.backup"
     fi
     
-    # Бэкап существующей конфигурации DNSCrypt
+    # Бэкап конфигурации DNSCrypt
     if [ -f "$DNSCRYPT_CONFIG" ]; then
         cp "$DNSCRYPT_CONFIG" "$BACKUP_DIR/dnscrypt-proxy.toml.backup"
     fi
     
-    # Сохраняем список процессов, использующих порт 53
+    # Сохраняем список процессов на порту 53
     if command -v lsof >/dev/null 2>&1; then
         lsof -i :53 > "$BACKUP_DIR/port_53_processes.txt" 2>/dev/null
     fi
     
-    # Сохраняем текущие DNS настройки
+    # Сохраняем DNS настройки
     if command -v resolvectl >/dev/null 2>&1; then
         resolvectl status > "$BACKUP_DIR/dns_settings.txt" 2>/dev/null
     fi
@@ -99,17 +134,16 @@ rollback_system() {
         return 1
     fi
     
-    # Восстанавливаем resolv.conf
+    # Восстанавливаем файлы из бэкапа
     if [ -f "$BACKUP_DIR/resolv.conf.backup" ]; then
         cp "$BACKUP_DIR/resolv.conf.backup" "/etc/resolv.conf"
     fi
     
-    # Восстанавливаем конфигурацию DNSCrypt
     if [ -f "$BACKUP_DIR/dnscrypt-proxy.toml.backup" ]; then
         cp "$BACKUP_DIR/dnscrypt-proxy.toml.backup" "$DNSCRYPT_CONFIG"
     fi
     
-    # Перезапускаем системные службы DNS если они были активны
+    # Восстанавливаем системные службы
     if grep -q "systemd-resolved" "$BACKUP_DIR/port_53_processes.txt" 2>/dev/null; then
         systemctl restart systemd-resolved
     fi
@@ -118,8 +152,8 @@ rollback_system() {
     return 0
 }
 
+# Функции проверки системы и предварительной подготовки
 
-# 3. Функции проверки системы и предварительной подготовки
 check_prerequisites() {
     log "INFO" "Проверка предварительных требований..."
     
@@ -243,11 +277,11 @@ check_port_53() {
     return 0
 }
 
-# 4. Функции установки и настройки DNSCrypt
+# Функции установки и настройки DNSCrypt
 
-# Функция загрузки и установки DNSCrypt
 install_dnscrypt() {
     log "INFO" "Начало установки DNSCrypt..."
+    mark_state "installation_started"
     
     # Создание пользователя для DNSCrypt если его нет
     if ! id -u "$DNSCRYPT_USER" >/dev/null 2>&1; then
@@ -299,11 +333,16 @@ install_dnscrypt() {
     cd - >/dev/null
     rm -rf "$temp_dir"
     
-    log "SUCCESS" "DNSCrypt установлен успешно"
-    return 0
+    if [ $? -eq 0 ]; then
+        rm -f "$STATE_FILE"
+        log "SUCCESS" "DNSCrypt установлен успешно"
+        return 0
+    else
+        log "ERROR" "Ошибка при установке DNSCrypt"
+        return 1
+    fi
 }
 
-# Создание конфигурации по умолчанию
 create_default_config() {
     log "INFO" "Создание конфигурации по умолчанию..."
     
@@ -349,7 +388,6 @@ EOF
     return 0
 }
 
-# Создание systemd сервиса
 create_systemd_service() {
     log "INFO" "Создание systemd сервиса..."
     
@@ -397,9 +435,8 @@ EOF
     return 0
 }
 
-# 5. Функции проверки установки и управления DNSCrypt
+# Функции проверки установки и управления DNSCrypt
 
-# Функция проверки установки
 verify_installation() {
     log "INFO" "=== Проверка установки DNSCrypt ==="
     local errors=0
@@ -493,7 +530,6 @@ verify_installation() {
     log "INFO" "Проверка прослушивания порта 53..."
     local port_check_failed=true
     
-    # Проверка через ss
     if ss -lntu | grep -q ':53.*LISTEN'; then
         port_check_failed=false
         local port_info=$(ss -lntp | grep ':53.*LISTEN')
@@ -505,7 +541,6 @@ verify_installation() {
         fi
     fi
     
-    # Проверка через netstat если ss не нашел порт
     if $port_check_failed && command -v netstat >/dev/null 2>&1; then
         if netstat -lnp | grep -q ':53.*LISTEN'; then
             port_check_failed=false
@@ -551,9 +586,8 @@ verify_installation() {
     fi
 }
 
-# 6. Функции проверки DNS и управления конфигурацией
+# Функции проверки DNS и управления конфигурацией
 
-# Функция проверки текущего DNS сервера
 check_current_dns() {
     log "INFO" "=== Проверка текущего DNS сервера ==="
     
@@ -596,7 +630,6 @@ check_current_dns() {
     dig "$test_domain" +noall +comments | grep -E "SERVER:|Query time:" | sed 's/^/    /'
 }
 
-# Функция исправления DNS резолвинга
 fix_dns_resolution() {
     log "INFO" "=== Исправление настроек DNS резолвинга ==="
     
@@ -653,7 +686,6 @@ EOF
     fi
 }
 
-# Функция изменения DNS сервера
 change_dns_server() {
     log "INFO" "=== Изменение DNS сервера ==="
     
@@ -703,9 +735,8 @@ change_dns_server() {
     fi
 }
 
-# 7. Функции управления сервисом и основное меню
+# Функции управления сервисом и основное меню
 
-# Функция управления сервисом
 manage_service() {
     log "INFO" "=== Управление службой DNSCrypt ==="
     
@@ -768,7 +799,6 @@ manage_service() {
     esac
 }
 
-# Функция очистки кэша
 clear_cache() {
     log "INFO" "=== Очистка кэша DNSCrypt ==="
     
@@ -805,8 +835,10 @@ clear_cache() {
     fi
 }
 
-# Основное меню
 main_menu() {
+    # Создаем временный файл состояния
+    touch "$STATE_FILE"
+    
     while true; do
         echo
         echo "=== DNSCrypt Manager v$VERSION ==="
