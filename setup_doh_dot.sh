@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Метаданные
-VERSION="2.0.25"
-SCRIPT_START_TIME="2025-02-16 08:33:45"
+VERSION="2.0.27"
+SCRIPT_START_TIME="2025-02-16 08:53:40"
 CURRENT_USER="gopnikgame"
 
 # Константы
@@ -116,6 +116,61 @@ setup_russian_locale() {
     fi
 }
 
+# Сохранение состояния установки
+save_state() {
+    echo "$1" > "$STATE_FILE"
+}
+
+# Проверка системных требований
+check_prerequisites() {
+    log "INFO" "Проверка необходимых компонентов..."
+    
+    local required_commands=("curl" "wget" "tar" "systemctl" "dig" "ss" "useradd" "groupadd" "sed" "grep")
+    local missing_commands=()
+    local missing_packages=()
+    
+    # Проверка наличия команд
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_commands+=("$cmd")
+            case "$cmd" in
+                "curl") missing_packages+=("curl");;
+                "wget") missing_packages+=("wget");;
+                "tar") missing_packages+=("tar");;
+                "systemctl") missing_packages+=("systemd");;
+                "dig") missing_packages+=("dnsutils" "bind-utils");;
+                "ss") missing_packages+=("iproute2");;
+                "useradd"|"groupadd") missing_packages+=("shadow-utils");;
+                "sed"|"grep") missing_packages+=("grep" "sed");;
+            esac
+        fi
+    done
+    
+    # Если есть отсутствующие команды
+    if [ ${#missing_commands[@]} -ne 0 ]; then
+        log "ERROR" "Отсутствуют необходимые команды: ${missing_commands[*]}"
+        
+        # Определение пакетного менеджера
+        if command -v apt-get >/dev/null 2>&1; then
+            log "INFO" "Обнаружен apt-get, установка необходимых пакетов..."
+            apt-get update
+            apt-get install -y ${missing_packages[@]}
+        elif command -v yum >/dev/null 2>&1; then
+            log "INFO" "Обнаружен yum, установка необходимых пакетов..."
+            yum install -y ${missing_packages[@]}
+        elif command -v dnf >/dev/null 2>&1; then
+            log "INFO" "Обнаружен dnf, установка необходимых пакетов..."
+            dnf install -y ${missing_packages[@]}
+        else
+            log "ERROR" "Не удалось определить пакетный менеджер"
+            return 1
+        fi
+    fi
+    
+    log "SUCCESS" "Все необходимые компоненты присутствуют"
+    return 0
+}
+
 # Проверка системного состояния
 check_system_state() {
     log "INFO" "Проверка состояния системы..."
@@ -155,54 +210,30 @@ check_system_state() {
 # Проверка порта 53
 check_port_53() {
     log "INFO" "Проверка порта 53..."
-    local port_in_use=false
-    local service_using=""
     
-    # Проверка использования порта
     if ss -lntu | grep -q ':53 '; then
-        port_in_use=true
+        local service_name=""
         
-        # Определение сервиса, использующего порт
         if systemctl is-active --quiet systemd-resolved; then
-            service_using="systemd-resolved"
+            service_name="systemd-resolved"
+            systemctl stop systemd-resolved
+            systemctl disable systemd-resolved
+            if [ -f "/etc/resolv.conf" ]; then
+                cp "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
+                echo "nameserver 8.8.8.8" > "/etc/resolv.conf"
+            fi
         elif systemctl is-active --quiet named; then
-            service_using="named (BIND)"
+            service_name="named"
+            systemctl stop named
+            systemctl disable named
         elif systemctl is-active --quiet dnsmasq; then
-            service_using="dnsmasq"
-        else
-            service_using="неизвестный сервис"
+            service_name="dnsmasq"
+            systemctl stop dnsmasq
+            systemctl disable dnsmasq
         fi
         
-        log "WARN" "Порт 53 занят сервисом: $service_using"
+        log "INFO" "Отключен сервис: $service_name"
         
-        # Обработка различных сервисов
-        case $service_using in
-            "systemd-resolved")
-                log "INFO" "Отключение systemd-resolved..."
-                systemctl stop systemd-resolved
-                systemctl disable systemd-resolved
-                if [ -f "/etc/resolv.conf" ]; then
-                    cp "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
-                    echo "nameserver 8.8.8.8" > "/etc/resolv.conf"
-                fi
-                ;;
-            "named (BIND)")
-                log "INFO" "Отключение BIND..."
-                systemctl stop named
-                systemctl disable named
-                ;;
-            "dnsmasq")
-                log "INFO" "Отключение dnsmasq..."
-                systemctl stop dnsmasq
-                systemctl disable dnsmasq
-                ;;
-            *)
-                log "ERROR" "Не удалось определить сервис, использующий порт 53"
-                return 1
-                ;;
-        esac
-        
-        # Повторная проверка порта
         if ss -lntu | grep -q ':53 '; then
             log "ERROR" "Не удалось освободить порт 53"
             return 1
@@ -216,141 +247,154 @@ check_port_53() {
 # Создание резервных копий
 create_backup() {
     log "INFO" "Создание резервных копий..."
-    
-    # Создание директории для бэкапов
     mkdir -p "$BACKUP_DIR"
     
-    # Бэкап DNS конфигурации
-    if [ -f "/etc/resolv.conf" ]; then
-        cp -p "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
-    fi
+    local files_to_backup=(
+        "/etc/resolv.conf"
+        "/etc/systemd/resolved.conf"
+        "$DNSCRYPT_CONFIG"
+        "/usr/local/x-ui/config.json"
+    )
     
-    # Бэкап systemd-resolved конфигурации
-    if [ -f "/etc/systemd/resolved.conf" ]; then
-        cp -p "/etc/systemd/resolved.conf" "${BACKUP_DIR}/resolved.conf.backup"
-    fi
-    
-    # Бэкап конфигурации DNSCrypt если есть
-    if [ -f "$DNSCRYPT_CONFIG" ]; then
-        cp -p "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy.toml.backup"
-    fi
-    
-    # Бэкап конфигурации 3x-ui если есть
-    if [ -f "/usr/local/x-ui/config.json" ]; then
-        cp -p "/usr/local/x-ui/config.json" "${BACKUP_DIR}/x-ui-config.json.backup"
-    fi
+    for file in "${files_to_backup[@]}"; do
+        if [ -f "$file" ]; then
+            cp -p "$file" "${BACKUP_DIR}/$(basename "$file").backup"
+        fi
+    done
     
     log "SUCCESS" "Резервные копии созданы в $BACKUP_DIR"
     return 0
 }
 
-# Проверка установки DNSCrypt
-check_dnscrypt_installed() {
-    log "INFO" "Проверка установки DNSCrypt..."
-    if [ -f "$DNSCRYPT_BIN_PATH" ] && systemctl is-active --quiet dnscrypt-proxy; then
-        log "INFO" "DNSCrypt установлен и работает"
-        return 0
-    else
-        log "INFO" "DNSCrypt не установлен"
-        return 1
+# Откат системы к исходному состоянию
+rollback_system() {
+    log "INFO" "=== Начало отката системы ==="
+    
+    # Остановка и отключение DNSCrypt
+    log "INFO" "Остановка DNSCrypt..."
+    systemctl stop dnscrypt-proxy 2>/dev/null || true
+    systemctl disable dnscrypt-proxy 2>/dev/null || true
+    
+    # Удаление файлов DNSCrypt
+    log "INFO" "Удаление файлов DNSCrypt..."
+    rm -f "$DNSCRYPT_BIN_PATH" 2>/dev/null || true
+    rm -rf "/etc/dnscrypt-proxy" 2>/dev/null || true
+    rm -rf "$DNSCRYPT_CACHE_DIR" 2>/dev/null || true
+    
+    # Восстановление конфигураций из бэкапа
+    if [ -d "$BACKUP_DIR" ]; then
+        log "INFO" "Восстановление конфигураций из бэкапа..."
+        
+        if [ -f "${BACKUP_DIR}/resolv.conf.backup" ]; then
+            cp -f "${BACKUP_DIR}/resolv.conf.backup" "/etc/resolv.conf"
+        fi
+        
+        if [ -f "${BACKUP_DIR}/resolved.conf.backup" ]; then
+            cp -f "${BACKUP_DIR}/resolved.conf.backup" "/etc/systemd/resolved.conf"
+            systemctl enable systemd-resolved 2>/dev/null || true
+            systemctl start systemd-resolved 2>/dev/null || true
+        fi
+        
+        if [ -f "${BACKUP_DIR}/x-ui-config.json.backup" ]; then
+            cp -f "${BACKUP_DIR}/x-ui-config.json.backup" "/usr/local/x-ui/config.json"
+            systemctl restart x-ui 2>/dev/null || true
+        fi
+    fi
+    
+    # Удаление временных файлов
+    rm -f "$STATE_FILE" 2>/dev/null || true
+    
+    log "INFO" "Откат системы завершён"
+    
+    # Проверка DNS-резолвинга после отката
+    if ! dig @1.1.1.1 google.com +short +timeout=5 > /dev/null 2>&1; then
+        log "WARN" "После отката возможны проблемы с DNS. Проверьте настройки сети"
     fi
 }
 
-# Проверка установки 3x-ui
-check_3xui_installed() {
-    log "INFO" "Проверка установки 3x-ui..."
-    if [ -f "/usr/local/x-ui/x-ui" ] && systemctl is-active --quiet x-ui; then
-        log "INFO" "3x-ui установлен и работает"
-        return 0
-    else
-        log "INFO" "3x-ui не установлен"
-        return 1
-    fi
-}
-
-# Проверка системных требований
-check_prerequisites() {
-    log "INFO" "Проверка необходимых компонентов..."
+# Изменение DNS сервера
+change_dns_server() {
+    log "INFO" "=== Изменение DNS сервера ==="
     
-    local required_commands=("curl" "wget" "tar" "systemctl" "dig" "ss" "useradd" "groupadd" "sed" "grep")
-    local missing_commands=()
-    local missing_packages=()
+    echo
+    echo "Доступные DNS серверы:"
+    echo "1) Cloudflare DNS (Быстрый, ориентирован на приватность)"
+    echo "2) Quad9 (Повышенная безопасность, блокировка вредоносных доменов)"
+    echo "3) OpenDNS (Семейный фильтр, блокировка нежелательного контента)"
+    echo "4) AdGuard DNS (Блокировка рекламы и трекеров)"
+    echo "5) Anonymous Montreal (Анонимный релей через Канаду)"
+    echo
     
-    # Проверка наличия команд
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_commands+=("$cmd")
-            case "$cmd" in
-                "curl") missing_packages+=("curl");;
-                "wget") missing_packages+=("wget");;
-                "tar") missing_packages+=("tar");;
-                "systemctl") missing_packages+=("systemd");;
-                "dig") missing_packages+=("dnsutils" "bind-utils");;
-                "ss") missing_packages+=("iproute2");;
-                "useradd"|"groupadd") missing_packages+=("shadow-utils");;
-                "sed"|"grep") missing_packages+=("grep" "sed");;
-            esac
-        fi
-    done
-    # Если есть отсутствующие команды, пытаемся их установить
-    if [ ${#missing_commands[@]} -ne 0 ]; then
-        log "ERROR" "Отсутствуют необходимые команды: ${missing_commands[*]}"
-        
-        # Определение пакетного менеджера и установка пакетов
-        if command -v apt-get >/dev/null 2>&1; then
-            log "INFO" "Обнаружен apt-get, установка необходимых пакетов..."
-            apt-get update
-            apt-get install -y ${missing_packages[@]}
-        elif command -v yum >/dev/null 2>&1; then
-            log "INFO" "Обнаружен yum, установка необходимых пакетов..."
-            yum install -y ${missing_packages[@]}
-        elif command -v dnf >/dev/null 2>&1; then
-            log "INFO" "Обнаружен dnf, установка необходимых пакетов..."
-            dnf install -y ${missing_packages[@]}
-        else
-            log "ERROR" "Не удалось определить пакетный менеджер"
-            log "INFO" "Установите вручную следующие пакеты: ${missing_packages[*]}"
-            return 1
-        fi
-        
-        # Повторная проверка после установки
-        for cmd in "${required_commands[@]}"; do
-            if ! command -v "$cmd" >/dev/null 2>&1; then
-                log "ERROR" "Не удалось установить все необходимые компоненты"
-                return 1
-            fi
-        done
-    fi
+    read -p "Выберите DNS сервер (1-5): " dns_choice
+    echo
     
-    # Проверка версии системы
-    if [ -f /etc/os-release ]; then
-        source /etc/os-release
-        log "INFO" "Обнаружена система: $PRETTY_NAME"
-    else
-        log "WARN" "Не удалось определить версию системы"
-    fi
-    
-    # Проверка архитектуры
-    local arch=$(uname -m)
-    case "$arch" in
-        x86_64|aarch64)
-            log "INFO" "Поддерживаемая архитектура: $arch"
-            ;;
-        *)
-            log "ERROR" "Неподдерживаемая архитектура: $arch"
-            return 1
-            ;;
+    case $dns_choice in
+        1) selected_server="${DNS_SERVERS[Cloudflare]}"
+           server_name="Cloudflare DNS";;
+        2) selected_server="${DNS_SERVERS[Quad9]}"
+           server_name="Quad9";;
+        3) selected_server="${DNS_SERVERS[OpenDNS]}"
+           server_name="OpenDNS";;
+        4) selected_server="${DNS_SERVERS[AdGuard]}"
+           server_name="AdGuard DNS";;
+        5) selected_server="${DNS_SERVERS[Anonymous Montreal]}"
+           server_name="Anonymous Montreal";;
+        *) log "ERROR" "Неверный выбор"
+           return 1;;
     esac
     
-    # Проверка свободного места
-    local free_space=$(df -k /usr/local/bin | awk 'NR==2 {print $4}')
-    if [ "$free_space" -lt 102400 ]; then # Минимум 100MB
-        log "ERROR" "Недостаточно свободного места: $free_space KB (требуется минимум 100MB)"
+    cp "$DNSCRYPT_CONFIG" "${DNSCRYPT_CONFIG}.backup"
+    sed -i "s/server_names = \\[[^]]*\\]/server_names = ['${selected_server}']/g" "$DNSCRYPT_CONFIG"
+    
+    systemctl restart dnscrypt-proxy
+    
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        if dig @127.0.0.1 google.com +short +timeout=5 > /dev/null 2>&1; then
+            log "SUCCESS" "DNS сервер успешно изменён на $server_name"
+            return 0
+        else
+            log "ERROR" "Тест разрешения DNS не пройден"
+            mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
+            systemctl restart dnscrypt-proxy
+            return 1
+        fi
+    else
+        log "ERROR" "Служба DNSCrypt не запустилась"
+        mv "${DNSCRYPT_CONFIG}.backup" "$DNSCRYPT_CONFIG"
+        systemctl restart dnscrypt-proxy
+        return 1
+    fi
+}
+
+# Настройка DNS для 3x-ui
+configure_3xui_dns() {
+    log "INFO" "=== Настройка DNS для 3x-ui ==="
+    
+    local xui_config="/usr/local/x-ui/config.json"
+    
+    if [ ! -f "$xui_config" ]; then
+        log "ERROR" "Конфигурационный файл 3x-ui не найден"
         return 1
     fi
     
-    log "SUCCESS" "Все необходимые компоненты присутствуют"
-    return 0
+    cp "$xui_config" "${xui_config}.backup"
+    
+    local current_dns=$(grep -o '"dns_server":"[^"]*"' "$xui_config" | cut -d'"' -f4)
+    log "INFO" "Текущий DNS сервер в 3x-ui: $current_dns"
+    
+    sed -i 's/"dns_server":"[^"]*"/"dns_server":"127.0.0.1"/' "$xui_config"
+    
+    systemctl restart x-ui
+    
+    if systemctl is-active --quiet x-ui; then
+        log "SUCCESS" "Настройка DNS для 3x-ui выполнена успешно"
+        return 0
+    else
+        log "ERROR" "Не удалось перезапустить 3x-ui"
+        mv "${xui_config}.backup" "$xui_config"
+        systemctl restart x-ui
+        return 1
+    fi
 }
 
 # Диагностика DNSCrypt
@@ -399,21 +443,6 @@ diagnose_dnscrypt() {
         fi
     done
     
-    # Проверка логов
-    echo -e "\n4️⃣ Анализ логов:"
-    if [ -f "/var/log/dnscrypt-proxy/dnscrypt-proxy.log" ]; then
-        local errors=$(grep -i "error\|failed\|warning" /var/log/dnscrypt-proxy/dnscrypt-proxy.log | tail -n 5)
-        if [ -n "$errors" ]; then
-            echo "⚠️ Найдены ошибки в логах:"
-            echo "$errors"
-            issues=$((issues + 1))
-        else
-            echo "✅ Ошибок в логах не обнаружено"
-        fi
-    else
-        echo "⚠️ Лог-файл не найден"
-    fi
-    
     # Итоговый отчёт
     echo -e "\n=== Результаты диагностики ==="
     if [ $issues -eq 0 ]; then
@@ -424,6 +453,30 @@ diagnose_dnscrypt() {
         echo "   1. Проверьте логи: /var/log/dnscrypt-proxy/dnscrypt-proxy.log"
         echo "   2. Проверьте конфигурацию: $DNSCRYPT_CONFIG"
         echo "   3. При необходимости перезапустите службу: systemctl restart dnscrypt-proxy"
+    fi
+}
+
+# Проверка установки DNSCrypt
+check_dnscrypt_installed() {
+    log "INFO" "Проверка установки DNSCrypt..."
+    if [ -f "$DNSCRYPT_BIN_PATH" ] && systemctl is-active --quiet dnscrypt-proxy; then
+        log "INFO" "DNSCrypt установлен и работает"
+        return 0
+    else
+        log "INFO" "DNSCrypt не установлен"
+        return 1
+    fi
+}
+
+# Проверка установки 3x-ui
+check_3xui_installed() {
+    log "INFO" "Проверка установки 3x-ui..."
+    if [ -f "/usr/local/x-ui/x-ui" ] && systemctl is-active --quiet x-ui; then
+        log "INFO" "3x-ui установлен и работает"
+        return 0
+    else
+        log "INFO" "3x-ui не установлен"
+        return 1
     fi
 }
 
@@ -440,6 +493,96 @@ cleanup() {
 
 # Устанавливаем trap для очистки
 trap cleanup EXIT
+
+# Основная функция
+main() {
+    log "INFO" "Запуск скрипта (Версия: $VERSION)"
+    log "INFO" "Время запуска: $SCRIPT_START_TIME"
+    log "INFO" "Текущий пользователь: $CURRENT_USER"
+    
+    check_root || exit 1
+    setup_russian_locale || log "WARN" "Продолжаем работу без русской локали"
+    
+    if ! check_dnscrypt_installed; then
+        log "INFO" "DNSCrypt не установлен, начинаем установку..."
+        check_prerequisites || exit 1
+        check_system_state || exit 1
+        check_port_53 || exit 1
+        create_backup || exit 1
+        
+        if ! install_dnscrypt; then
+            log "ERROR" "Установка не удалась"
+            rollback_system
+            exit 1
+        fi
+        
+        if ! verify_installation; then
+            log "ERROR" "Проверка установки не удалась"
+            rollback_system
+            exit 1
+        fi
+        
+        log "SUCCESS" "Установка DNSCrypt успешно завершена"
+        log "INFO" "Перезапустите скрипт для настройки интеграции с 3x-ui"
+        return 0
+    fi
+    
+    echo
+    echo "DNSCrypt установлен. Выберите действие:"
+    echo "1) Изменить DNS сервер"
+    echo "2) Настроить интеграцию с 3x-ui"
+    echo "3) Запустить диагностику DNSCrypt"
+    echo "4) Выход"
+    echo
+    read -p "Выберите действие (1-4): " option
+    echo
+    
+    case $option in
+        1)
+            change_dns_server
+            ;;
+        2)
+            if ! check_3xui_installed; then
+                log "ERROR" "3x-ui не установлен. Установите 3x-ui командой:"
+                log "INFO" "bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
+                exit 1
+            fi
+            
+            echo "Настроить 3x-ui для работы через DNSCrypt?"
+            echo "Будет выполнено:"
+            echo "1. Обновление настроек DNS в 3x-ui на localhost (127.0.0.1)"
+            echo "2. Перезапуск службы 3x-ui"
+            echo "3. Создание резервной копии настроек"
+            echo
+            read -p "Продолжить? (д/н): " -n 1 -r
+            echo
+            
+            if [[ $REPLY =~ ^[ДдYy]$ ]]; then
+                if configure_3xui_dns; then
+                    log "SUCCESS" "3x-ui успешно настроен"
+                    log "INFO" "Настройка завершена!"
+                else
+                    log "ERROR" "Ошибка настройки DNS для 3x-ui"
+                    exit 1
+                fi
+            else
+                log "INFO" "Настройка отменена пользователем"
+                exit 0
+            fi
+            ;;
+        3)
+            diagnose_dnscrypt
+            ;;
+        4)
+            log "INFO" "Выход из программы..."
+            exit 0
+            ;;
+        *)
+            log "ERROR" "Неверный выбор"
+            exit 1
+            ;;
+    esac
+}
 
 # Запускаем основную функцию
 main
