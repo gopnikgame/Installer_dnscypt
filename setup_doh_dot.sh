@@ -666,6 +666,7 @@ EOL
 verify_installation() {
     log "INFO" "=== Проверка установки DNSCrypt ==="
     local errors=0
+    local error_details=()
     
     # Проверка бинарного файла
     log "INFO" "Проверка бинарного файла..."
@@ -673,6 +674,7 @@ verify_installation() {
         log "ERROR" "Бинарный файл DNSCrypt не найден или не исполняемый"
         log "DEBUG" "Путь: $DNSCRYPT_BIN_PATH"
         errors=$((errors + 1))
+        error_details+=("Проблема с бинарным файлом")
     else
         log "INFO" "✓ Бинарный файл DNSCrypt найден и имеет правильные права"
     fi
@@ -682,12 +684,14 @@ verify_installation() {
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
         log "ERROR" "Файл конфигурации не найден"
         errors=$((errors + 1))
+        error_details+=("Отсутствует файл конфигурации")
     else
         log "INFO" "✓ Файл конфигурации найден"
         # Проверка содержимого конфигурации
         if ! grep -q "listen_addresses.*=.*\['127.0.0.1:53'\]" "$DNSCRYPT_CONFIG"; then
             log "ERROR" "Некорректная конфигурация прослушиваемого адреса"
             errors=$((errors + 1))
+            error_details+=("Некорректная конфигурация адреса")
         fi
     fi
     
@@ -698,13 +702,24 @@ verify_installation() {
         if [ ! -d "$dir" ]; then
             log "ERROR" "Директория $dir не существует"
             errors=$((errors + 1))
+            error_details+=("Отсутствует директория $dir")
             continue
         fi
         
+        # Проверка владельца директории
+        local dir_owner=$(stat -c '%U' "$dir")
+        if [ "$dir_owner" != "$DNSCRYPT_USER" ]; then
+            log "ERROR" "Неправильный владелец директории $dir: $dir_owner (должен быть $DNSCRYPT_USER)"
+            errors=$((errors + 1))
+            error_details+=("Неправильный владелец $dir")
+        fi
+        
+        # Проверка прав на запись
         if ! su -s /bin/bash "$DNSCRYPT_USER" -c "test -w '$dir'"; then
             log "ERROR" "Неправильные права доступа к директории $dir"
             log "DEBUG" "Текущие права: $(ls -ld "$dir")"
             errors=$((errors + 1))
+            error_details+=("Нет прав на запись в $dir")
         else
             log "INFO" "✓ Директория $dir имеет корректные права"
         fi
@@ -715,10 +730,12 @@ verify_installation() {
     if ! command -v getcap >/dev/null 2>&1; then
         log "ERROR" "Утилита getcap не найдена"
         errors=$((errors + 1))
+        error_details+=("Отсутствует утилита getcap")
     elif ! getcap "$DNSCRYPT_BIN_PATH" | grep -q 'cap_net_bind_service'; then
         log "ERROR" "Отсутствуют необходимые права для работы с портом 53"
         log "DEBUG" "Текущие capabilities: $(getcap "$DNSCRYPT_BIN_PATH")"
         errors=$((errors + 1))
+        error_details+=("Отсутствуют capabilities для порта 53")
     else
         log "INFO" "✓ Права для работы с портом 53 корректны"
     fi
@@ -730,8 +747,10 @@ verify_installation() {
         log "DEBUG" "Статус службы:"
         systemctl status dnscrypt-proxy --no-pager
         errors=$((errors + 1))
+        error_details+=("Служба не запущена")
     else
-        log "INFO" "✓ Служба DNSCrypt активна"
+        local uptime=$(systemctl show dnscrypt-proxy --property=ActiveEnterTimestamp | cut -d'=' -f2)
+        log "INFO" "✓ Служба DNSCrypt активна (запущена с: $uptime)"
     fi
     
     # Проверка порта 53
@@ -741,50 +760,54 @@ verify_installation() {
         log "DEBUG" "Текущие прослушиваемые порты:"
         ss -lntu | grep 'LISTEN'
         errors=$((errors + 1))
+        error_details+=("Порт 53 не прослушивается")
     else
-        log "INFO" "✓ Порт 53 прослушивается"
+        local port_owner=$(ss -lntp | grep ':53 ' | awk '{print $7}' | cut -d'"' -f2)
+        log "INFO" "✓ Порт 53 прослушивается процессом: $port_owner"
     fi
     
     # Расширенная проверка DNS резолвинга
     log "INFO" "Проверка DNS резолвинга..."
     local test_domains=("google.com" "cloudflare.com" "github.com")
     local success=0
-    local total=0
+    local total=${#test_domains[@]}
     
     for domain in "${test_domains[@]}"; do
-        total=$((total + 1))
         log "DEBUG" "Тестирование резолвинга для $domain..."
         if dig @127.0.0.1 "$domain" +short +timeout=10 > /dev/null 2>&1; then
-            log "INFO" "✓ Успешное разрешение $domain"
+            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats | grep "Query time" | awk '{print $4}')
+            log "INFO" "✓ $domain - OK (время ответа: ${resolve_time}ms)"
             success=$((success + 1))
         else
             log "WARN" "✗ Не удалось разрешить $domain"
-            # Дополнительная диагностика
-            log "DEBUG" "Подробный вывод dig для $domain:"
+            log "DEBUG" "Подробности:"
             dig @127.0.0.1 "$domain" +noall +answer +comments +timeout=10
         fi
     done
     
     if [ $success -eq 0 ]; then
         log "ERROR" "Тест DNS резолвинга полностью провален"
-        log "DEBUG" "Проверка конфигурации resolv.conf:"
+        log "DEBUG" "Текущие DNS настройки:"
         cat /etc/resolv.conf
-        log "DEBUG" "Проверка маршрутизации DNS-запросов:"
-        traceroute -n -p 53 8.8.8.8 2>&1 || true
         errors=$((errors + 1))
+        error_details+=("DNS резолвинг не работает")
     elif [ $success -lt $total ]; then
         log "WARN" "Частичные проблемы с DNS резолвингом ($success из $total успешно)"
-        errors=$((errors + 1))
+        error_details+=("Нестабильный DNS резолвинг")
     else
-        log "INFO" "✓ DNS резолвинг работает корректно"
+        log "INFO" "✓ DNS резолвинг работает корректно ($success из $total)"
     fi
     
     # Итоговый результат
     if [ $errors -eq 0 ]; then
-        log "SUCCESS" "=== Проверка установки успешно завершена ==="
+        log "SUCCESS" "=== Все проверки успешно пройдены ==="
         return 0
     else
         log "ERROR" "=== При проверке установки обнаружено $errors ошибок ==="
+        log "DEBUG" "Список проблем:"
+        for detail in "${error_details[@]}"; do
+            log "DEBUG" "- $detail"
+        fi
         return 1
     fi
 }
