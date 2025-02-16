@@ -1,4 +1,5 @@
 #!/bin/bash
+# Quick Install Script for DNSCrypt Manager
 
 # Цветовые коды
 RED="\033[0;31m"
@@ -50,8 +51,8 @@ echo -e "Для запуска используйте команду: ${YELLOW}s
 echo -e "Все модули будут автоматически загружены при первом запуске\n"
 
 # Предложение запустить скрипт
-read -p "Запустить DNSCrypt Manager сейчас? (y/n): " -n 1 -r
-echo 
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+echo -n "Запустить DNSCrypt Manager сейчас? (y/n): "
+read -r answer
+if [[ "$answer" =~ ^[Yy]$ ]]; then
     /usr/local/bin/dnscrypt_manager
 fi
