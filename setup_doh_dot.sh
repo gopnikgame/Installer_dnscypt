@@ -213,37 +213,71 @@ check_system_state() {
 check_port_53() {
     log "INFO" "Проверка порта 53..."
     
-    if ss -lntu | grep -q ':53 '; then
+    # Проверяем различными способами
+    local port_in_use=false
+    
+    # Проверка через ss
+    if ss -lntu | grep -q ':53 .*LISTEN'; then
+        port_in_use=true
+    fi
+    
+    # Проверка через netstat (для старых систем)
+    if ! $port_in_use && command -v netstat >/dev/null 2>&1; then
+        if netstat -lnp | grep -q ':53 .*LISTEN'; then
+            port_in_use=true
+        fi
+    fi
+    
+    if $port_in_use; then
         local service_name=""
         
-        if systemctl is-active --quiet systemd-resolved; then
-            service_name="systemd-resolved"
-            systemctl stop systemd-resolved
-            systemctl disable systemd-resolved
-            if [ -f "/etc/resolv.conf" ]; then
-                cp "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup"
-                echo "nameserver 8.8.8.8" > "/etc/resolv.conf"
+        # Проверяем известные службы DNS
+        for service in systemd-resolved named dnsmasq bind9; do
+            if systemctl is-active --quiet $service; then
+                service_name="$service"
+                log "INFO" "Обнаружен активный DNS сервис: $service"
+                
+                # Создаем резервную копию resolv.conf
+                if [ -f "/etc/resolv.conf" ]; then
+                    cp "/etc/resolv.conf" "${BACKUP_DIR}/resolv.conf.backup.${service}"
+                fi
+                
+                # Останавливаем и отключаем сервис
+                systemctl stop $service
+                systemctl disable $service
+                log "INFO" "Отключен сервис: $service_name"
+                
+                # Проверяем успешность остановки
+                if systemctl is-active --quiet $service; then
+                    log "ERROR" "Не удалось остановить сервис $service"
+                    return 1
+                fi
+                break
             fi
-        elif systemctl is-active --quiet named; then
-            service_name="named"
-            systemctl stop named
-            systemctl disable named
-        elif systemctl is-active --quiet dnsmasq; then
-            service_name="dnsmasq"
-            systemctl stop dnsmasq
-            systemctl disable dnsmasq
-        fi
+        done
         
-        log "INFO" "Отключен сервис: $service_name"
-        
-        if ss -lntu | grep -q ':53 '; then
+        # Проверяем, освободился ли порт
+        sleep 2
+        if ss -lntu | grep -q ':53 .*LISTEN'; then
             log "ERROR" "Не удалось освободить порт 53"
+            log "DEBUG" "Процессы, использующие порт 53:"
+            if command -v lsof >/dev/null 2>&1; then
+                lsof -i :53
+            else
+                netstat -tulpn | grep ':53'
+            fi
             return 1
         fi
     fi
     
-    log "SUCCESS" "Порт 53 доступен"
-    return 0
+    # Проверяем, что порт действительно свободен
+    if ! nc -z localhost 53 2>/dev/null; then
+        log "SUCCESS" "Порт 53 доступен"
+        return 0
+    else
+        log "ERROR" "Порт 53 все еще занят"
+        return 1
+    fi
 }
 
 # Создание резервных копий
@@ -464,22 +498,28 @@ EOL
 }
 
 # Проверка установки
+# Метаданные
+VERSION="2.0.41"
+SCRIPT_START_TIME="2025-02-16 11:02:02" 
+CURRENT_USER="gopnikgame"
+
+# Функция проверки установки
 verify_installation() {
     log "INFO" "=== Проверка установки DNSCrypt ==="
     local errors=0
     local error_details=()
-    
+
     # Проверка бинарного файла
     log "INFO" "Проверка бинарного файла..."
     if [ ! -x "$DNSCRYPT_BIN_PATH" ]; then
         log "ERROR" "Бинарный файл DNSCrypt не найден или не исполняемый"
-        log "DEBUG" "Путь: $DNSCRYPT_BIN_PATH"
+        log "DEBUG" "Путь: $DNSCRYPT_BIN_PATH" 
         errors=$((errors + 1))
         error_details+=("Проблема с бинарным файлом")
     else
         log "INFO" "✓ Бинарный файл DNSCrypt найден и имеет правильные права"
     fi
-    
+
     # Проверка конфигурации
     log "INFO" "Проверка конфигурации..."
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
@@ -494,7 +534,7 @@ verify_installation() {
             error_details+=("Некорректная конфигурация адреса")
         fi
     fi
-    
+
     # Проверка прав доступа к директориям
     log "INFO" "Проверка прав доступа к директориям..."
     local directories=("$DNSCRYPT_CACHE_DIR" "/var/log/dnscrypt-proxy" "/var/cache/dnscrypt-proxy")
@@ -505,7 +545,7 @@ verify_installation() {
             error_details+=("Отсутствует директория $dir")
             continue
         fi
-        
+
         # Проверка владельца директории
         local dir_owner=$(stat -c '%U' "$dir")
         if [ "$dir_owner" != "$DNSCRYPT_USER" ]; then
@@ -513,7 +553,7 @@ verify_installation() {
             errors=$((errors + 1))
             error_details+=("Неправильный владелец $dir")
         fi
-        
+
         # Проверка прав на запись
         if ! su -s /bin/bash "$DNSCRYPT_USER" -c "test -w '$dir'"; then
             log "ERROR" "Неправильные права доступа к директории $dir"
@@ -524,7 +564,7 @@ verify_installation() {
             log "INFO" "✓ Директория $dir имеет корректные права"
         fi
     done
-    
+
     # Проверка capabilities
     log "INFO" "Проверка специальных прав (capabilities)..."
     if ! command -v getcap >/dev/null 2>&1; then
@@ -539,7 +579,7 @@ verify_installation() {
     else
         log "INFO" "✓ Права для работы с портом 53 корректны"
     fi
-    
+
     # Проверка службы
     log "INFO" "Проверка статуса службы..."
     if ! systemctl is-active --quiet dnscrypt-proxy; then
@@ -552,66 +592,90 @@ verify_installation() {
         local uptime=$(systemctl show dnscrypt-proxy --property=ActiveEnterTimestamp | cut -d'=' -f2)
         log "INFO" "✓ Служба DNSCrypt активна (запущена с: $uptime)"
     fi
-    
+
     # Проверка порта 53
     log "INFO" "Проверка прослушивания порта 53..."
-    if ! ss -lntu | grep -q ':53 .*LISTEN.*'; then
+    local port_check_failed=true
+    
+    # Проверка через ss
+    if ss -lntu | grep -q ':53.*LISTEN'; then
+        port_check_failed=false
+        local port_info=$(ss -lntp | grep ':53.*LISTEN')
+        if echo "$port_info" | grep -q "dnscrypt"; then
+            log "INFO" "✓ Порт 53 прослушивается процессом DNSCrypt"
+        else
+            local port_owner=$(echo "$port_info" | awk '{print $7}' | cut -d'"' -f2)
+            log "WARN" "Порт 53 прослушивается процессом: ${port_owner:-неизвестно}"
+        fi
+    fi
+    
+    # Проверка через netstat если ss не нашел порт
+    if $port_check_failed && command -v netstat >/dev/null 2>&1; then
+        if netstat -lnp | grep -q ':53.*LISTEN'; then
+            port_check_failed=false
+            log "INFO" "✓ Порт 53 прослушивается (обнаружено через netstat)"
+        fi
+    fi
+    
+    # Дополнительная проверка через nc
+    if $port_check_failed && command -v nc >/dev/null 2>&1; then
+        if nc -z localhost 53 2>/dev/null; then
+            port_check_failed=false
+            log "INFO" "✓ Порт 53 отвечает на запросы (проверено через nc)"
+        fi
+    fi
+
+    if $port_check_failed; then
         log "ERROR" "Порт 53 не прослушивается"
         log "DEBUG" "Текущие прослушиваемые порты:"
         ss -lntu | grep 'LISTEN'
         errors=$((errors + 1))
         error_details+=("Порт 53 не прослушивается")
-    else
-        local port_owner=$(ss -lntp | grep ':53 ' | awk '{print $7}' | cut -d'"' -f2)
-        log "INFO" "✓ Порт 53 прослушивается процессом: $port_owner"
     fi
-    
-    # Расширенная проверка DNS резолвинга
+
+    # Проверка работоспособности DNS
     log "INFO" "Проверка DNS резолвинга..."
+    local dns_success=0
+    local total_tests=3
     local test_domains=("google.com" "cloudflare.com" "github.com")
-    local success=0
-    local total=${#test_domains[@]}
     
     for domain in "${test_domains[@]}"; do
-        log "DEBUG" "Тестирование резолвинга для $domain..."
-        if dig @127.0.0.1 "$domain" +short +timeout=10 > /dev/null 2>&1; then
-            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats | grep "Query time" | awk '{print $4}')
-            log "INFO" "✓ $domain - OK (время ответа: ${resolve_time}ms)"
-            success=$((success + 1))
+        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
+            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
+            log "INFO" "✓ $domain - OK (время ответа: ${resolve_time:-0}ms)"
+            dns_success=$((dns_success + 1))
         else
             log "WARN" "✗ Не удалось разрешить $domain"
-            log "DEBUG" "Подробности:"
-            dig @127.0.0.1 "$domain" +noall +answer +comments +timeout=10
         fi
     done
-    
-    if [ $success -eq 0 ]; then
-        log "ERROR" "Тест DNS резолвинга полностью провален"
-        log "DEBUG" "Текущие DNS настройки:"
-        cat /etc/resolv.conf
-        errors=$((errors + 1))
-        error_details+=("DNS резолвинг не работает")
-    elif [ $success -lt $total ]; then
-        log "WARN" "Частичные проблемы с DNS резолвингом ($success из $total успешно)"
-        error_details+=("Нестабильный DNS резолвинг")
+
+    if [ $dns_success -eq $total_tests ]; then
+        log "INFO" "✓ DNS резолвинг работает корректно ($dns_success из $total_tests)"
+        # Если DNS работает, но были проблемы с портом, уменьшаем счетчик ошибок
+        if [ $errors -gt 0 ] && [ $port_check_failed = true ]; then
+            errors=$((errors - 1))
+            error_details=(${error_details[@]/Порт 53 не прослушивается/})
+            log "INFO" "DNS работает корректно несмотря на проблемы с определением порта"
+        fi
     else
-        log "INFO" "✓ DNS резолвинг работает корректно ($success из $total)"
+        log "ERROR" "Проблемы с DNS резолвингом ($dns_success из $total_tests успешно)"
+        errors=$((errors + 1))
+        error_details+=("Проблемы с DNS резолвингом")
     fi
-    
-    # Итоговый результат
+
+    # Вывод результата
     if [ $errors -eq 0 ]; then
         log "SUCCESS" "=== Все проверки успешно пройдены ==="
         return 0
     else
         log "ERROR" "=== При проверке установки обнаружено $errors ошибок ==="
-        log "DEBUG" "Список проблем:"
-        for detail in "${error_details[@]}"; do
-            log "DEBUG" "- $detail"
-        done
+        if [ ${#error_details[@]} -gt 0 ]; then
+            log "DEBUG" "Список проблем:"
+            printf '%s\n' "${error_details[@]}" | sed 's/^/- /'
+        fi
         return 1
     fi
 }
-
 
 # Откат системы к исходному состоянию
 rollback_system() {
