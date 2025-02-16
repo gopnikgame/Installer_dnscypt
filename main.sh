@@ -1,16 +1,46 @@
-# Главный скрипт (main.sh):
 #!/bin/bash
+# main.sh
+# Created: 2025-02-16 14:19:45 UTC
+# Author: gopnikgame
+# Description: Главный скрипт управления DNSCrypt
 
+# Метаданные
 VERSION="2.0.55"
-SCRIPT_START_TIME="2025-02-16 13:37:06"
-CURRENT_USER="gopnikgame"
-SCRIPTS_DIR="/usr/local/dnscrypt-scripts"
-GITHUB_RAW_URL="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+MODULES_DIR="/usr/local/dnscrypt-scripts/modules"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/gopnikgame/dnscrypt-installer/main"
+LOG_FILE="/var/log/dnscrypt-installer.log"
 
-# Базовые функции логирования
+# Цветовые коды для вывода
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Функция логирования
 log() {
+    local level=$1
+    local message=$2
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "$timestamp [$1] $2"
+    
+    # Вывод в консоль с цветом
+    case $level in
+        "ERROR")
+            echo -e "${RED}$timestamp [$level] $message${NC}"
+            ;;
+        "SUCCESS")
+            echo -e "${GREEN}$timestamp [$level] $message${NC}"
+            ;;
+        "WARN")
+            echo -e "${YELLOW}$timestamp [$level] $message${NC}"
+            ;;
+        *)
+            echo "$timestamp [$level] $message"
+            ;;
+    esac
+    
+    # Запись в лог-файл
+    echo "$timestamp [$level] $message" >> "$LOG_FILE"
 }
 
 # Проверка root прав
@@ -21,19 +51,22 @@ check_root() {
     fi
 }
 
-# Создание директории для скриптов
-create_scripts_dir() {
-    mkdir -p "$SCRIPTS_DIR"
-    chmod 755 "$SCRIPTS_DIR"
+# Создание необходимых директорий
+create_directories() {
+    mkdir -p "$MODULES_DIR"
+    chmod 755 "$MODULES_DIR"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
 }
 
 # Загрузка модуля
 download_module() {
     local module_name=$1
     local module_url="$GITHUB_RAW_URL/modules/${module_name}.sh"
-    local module_path="$SCRIPTS_DIR/${module_name}.sh"
+    local module_path="$MODULES_DIR/${module_name}.sh"
     
     log "INFO" "Загрузка модуля $module_name..."
+    
     if wget -q "$module_url" -O "$module_path"; then
         chmod +x "$module_path"
         log "SUCCESS" "Модуль $module_name загружен"
@@ -44,27 +77,53 @@ download_module() {
     fi
 }
 
+# Проверка и загрузка модуля
+ensure_module() {
+    local module_name=$1
+    local module_path="$MODULES_DIR/${module_name}.sh"
+    
+    if [ ! -f "$module_path" ] || [ ! -x "$module_path" ]; then
+        download_module "$module_name"
+        return $?
+    fi
+    return 0
+}
+
 # Выполнение модуля
 execute_module() {
     local module_name=$1
-    local module_path="$SCRIPTS_DIR/${module_name}.sh"
+    local module_path="$MODULES_DIR/${module_name}.sh"
     
-    if [ ! -f "$module_path" ]; then
-        if ! download_module "$module_name"; then
-            return 1
+    if ensure_module "$module_name"; then
+        log "INFO" "Запуск модуля $module_name..."
+        bash "$module_path"
+        local exit_code=$?
+        
+        if [ $exit_code -eq 0 ]; then
+            log "SUCCESS" "Модуль $module_name выполнен успешно"
+        else
+            log "ERROR" "Модуль $module_name завершился с ошибкой (код: $exit_code)"
         fi
+        
+        return $exit_code
+    else
+        return 1
     fi
-    
-    log "INFO" "Запуск модуля $module_name..."
-    bash "$module_path"
-    return $?
+}
+
+# Очистка экрана и вывод заголовка
+show_header() {
+    clear
+    echo -e "${GREEN}=== DNSCrypt Manager v$VERSION ===${NC}"
+    echo "Текущее время: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "Пользователь: $USER"
+    echo "----------------------------------------"
 }
 
 # Главное меню
 main_menu() {
     while true; do
-        clear
-        echo "=== DNSCrypt Manager v$VERSION ==="
+        show_header
         echo "1) Установить DNSCrypt"
         echo "2) Проверить установку"
         echo "3) Изменить DNS сервер"
@@ -74,9 +133,11 @@ main_menu() {
         echo "7) Очистить кэш"
         echo "8) Создать резервную копию"
         echo "9) Восстановить из резервной копии"
+        echo "L) Показать лог"
         echo "0) Выход"
-        
-        read -p "Выберите действие (0-9): " choice
+        echo
+        read -p "Выберите действие: " choice
+        echo
         
         case $choice in
             1) execute_module "install_dnscrypt" ;;
@@ -88,6 +149,7 @@ main_menu() {
             7) execute_module "clear_cache" ;;
             8) execute_module "backup" ;;
             9) execute_module "restore" ;;
+            [Ll]) tail -n 50 "$LOG_FILE" ;;
             0) 
                 log "INFO" "Завершение работы..."
                 exit 0
@@ -97,11 +159,16 @@ main_menu() {
                 ;;
         esac
         
+        echo
         read -p "Нажмите Enter для продолжения..."
     done
 }
 
-# Запуск программы
+# Проверяем что скрипт запущен с правами root
 check_root
-create_scripts_dir
+
+# Создаем необходимые директории
+create_directories
+
+# Запускаем главное меню
 main_menu
