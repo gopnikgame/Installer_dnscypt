@@ -9,7 +9,7 @@
 VERSION="2.0.44"
 SCRIPT_START_TIME="2025-02-16 11:39:48"
 CURRENT_USER="gopnikgame"
-set -x
+
 # Константы
 DNSCRYPT_BIN_PATH="/usr/local/bin/dnscrypt-proxy"
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
