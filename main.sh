@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Version: 1.1.0
+# Version: 1.2.0
 # Author: gopnikgame
 # Created: 2025-06-22
 # Last Modified: 2025-06-22
@@ -18,7 +18,7 @@ SCRIPT_DIR="/usr/local/dnscrypt-scripts"
 MODULES_DIR="${SCRIPT_DIR}/modules"
 LOG_DIR="/var/log/dnscrypt"
 GITHUB_RAW="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/modules"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 SCRIPT_NAME="dnscrypt_manager"
 
 # Определяем порядок модулей
@@ -38,13 +38,26 @@ declare -a MODULE_ORDER=(
 declare -A MODULES=(
     ["install_dnscrypt.sh"]="Установка DNSCrypt"
     ["verify_installation.sh"]="Проверка установки"
-    ["check_dns.sh"]="Проверка текущего DNS"
-    ["change_dns.sh"]="Смена DNS сервера"
-    ["fix_dns.sh"]="Исправление DNS резолвинга"
+    ["check_dns.sh"]="Проверка текущей конфигурации DNS"
+    ["change_dns.sh"]="Настройка DNS серверов и протоколов"
+    ["fix_dns.sh"]="Настройка анонимного DNS и балансировки"
     ["manage_service.sh"]="Управление службой"
     ["clear_cache.sh"]="Очистка кэша"
     ["backup.sh"]="Создание резервной копии"
     ["restore.sh"]="Восстановление из резервной копии"
+)
+
+# Расширенные описания для подсказок
+declare -A MODULE_DETAILS=(
+    ["install_dnscrypt.sh"]="Установка и настройка DNSCrypt-proxy на систему"
+    ["verify_installation.sh"]="Проверка корректности установки компонентов DNSCrypt"
+    ["check_dns.sh"]="Проверка текущих DNS-серверов, тестирование скорости резолвинга и определение DNS-провайдера"
+    ["change_dns.sh"]="Изменение DNS-серверов, настройка протоколов (DNSCrypt/DoH/ODoH), параметров кэширования и безопасности (DNSSEC/NoLog/NoFilter)"
+    ["fix_dns.sh"]="Настройка анонимного DNS через релеи, балансировки нагрузки между серверами и тестирование скорости соединения"
+    ["manage_service.sh"]="Управление службой DNSCrypt-proxy (запуск, остановка, перезапуск)"
+    ["clear_cache.sh"]="Очистка кэша DNS для обновления информации о серверах"
+    ["backup.sh"]="Создание резервных копий конфигураций DNSCrypt"
+    ["restore.sh"]="Восстановление конфигураций из резервных копий"
 )
 
 # Функции для красивого вывода
@@ -132,7 +145,7 @@ check_root() {
 
 # Проверка зависимостей
 check_dependencies() {
-    local deps=("wget" "systemctl" "grep" "curl")
+    local deps=("wget" "systemctl" "grep" "curl" "whois" "dig")
     local missing_deps=()
 
     print_header "ПРОВЕРКА ЗАВИСИМОСТЕЙ"
@@ -150,9 +163,9 @@ check_dependencies() {
         print_step "Установка отсутствующих зависимостей: ${missing_deps[*]}"
         if [ -f /etc/debian_version ]; then
             apt-get update -qq
-            apt-get install -y "${missing_deps[@]}"
+            apt-get install -y "${missing_deps[@]}" dnsutils
         elif [ -f /etc/redhat-release ]; then
-            yum install -y "${missing_deps[@]}"
+            yum install -y "${missing_deps[@]}" bind-utils
         else
             print_error "Неподдерживаемый дистрибутив"
             exit 1
@@ -187,12 +200,48 @@ run_module() {
     local module_name=$1
     if [ -f "$MODULES_DIR/$module_name" ]; then
         print_header "ЗАПУСК МОДУЛЯ: ${MODULES[$module_name]}"
+        echo -e "${YELLOW}${MODULE_DETAILS[$module_name]}${NC}"
+        echo
         bash "$MODULES_DIR/$module_name"
         return $?
     else
         print_error "Модуль $module_name не найден"
         return 1
     fi
+}
+
+# Показать описание модуля
+show_module_info() {
+    local module_name=$1
+    echo -e "\n${BLUE}Описание модуля '${MODULES[$module_name]}':${NC}"
+    echo -e "${YELLOW}${MODULE_DETAILS[$module_name]}${NC}"
+    
+    case $module_name in
+        "check_dns.sh")
+            echo -e "\n${BLUE}Функциональность:${NC}"
+            echo "• Проверка текущих DNS-серверов в системе"
+            echo "• Определение статуса systemd-resolved"
+            echo "• Анализ конфигурации DNSCrypt"
+            echo "• Тестирование скорости DNS-резолвинга"
+            echo "• Определение DNS-провайдера по IP-адресу"
+            ;;
+        "change_dns.sh")
+            echo -e "\n${BLUE}Функциональность:${NC}"
+            echo "• Выбор DNS-серверов из предустановленных (Cloudflare, Google и др.)"
+            echo "• Настройка безопасности (DNSSEC, NoLog, NoFilter)"
+            echo "• Конфигурация поддерживаемых протоколов (DNSCrypt, DoH, ODoH)"
+            echo "• Настройка кэширования DNS и HTTP/3"
+            echo "• Управление источниками списков серверов"
+            ;;
+        "fix_dns.sh")
+            echo -e "\n${BLUE}Функциональность:${NC}"
+            echo "• Настройка Anonymized DNSCrypt через релеи"
+            echo "• Конфигурация Oblivious DoH (ODoH)"
+            echo "• Настройка балансировки нагрузки между серверами"
+            echo "• Тестирование времени отклика серверов"
+            echo "• Автоматический выбор оптимальных серверов"
+            ;;
+    esac
 }
 
 # Показать главное меню
@@ -216,6 +265,8 @@ show_menu() {
         ((i++))
         echo -e "$i) ${YELLOW}Обновить DNSCrypt Manager${NC}"
         ((i++))
+        echo -e "$i) ${YELLOW}Показать дополнительную информацию о модуле${NC}"
+        ((i++))
         echo -e "0) ${RED}Выход${NC}"
         echo
         
@@ -228,13 +279,29 @@ show_menu() {
                 exit 0
                 ;;
             $((i-1)))
-                self_update
+                # Показать информацию о модуле
+                echo -e "${BLUE}Выберите модуль для просмотра информации:${NC}"
+                local j=1
+                for module in "${MODULE_ORDER[@]}"; do
+                    echo -e "$j) ${MODULES[$module]}"
+                    ((j++))
+                done
+                read -p "Выберите модуль [1-$((j-1))]: " module_choice
+                
+                if [[ "$module_choice" =~ ^[0-9]+$ ]] && [ "$module_choice" -ge 1 ] && [ "$module_choice" -lt "$j" ]; then
+                    show_module_info "${MODULE_ORDER[$((module_choice-1))]}"
+                else
+                    print_error "Неверный выбор"
+                fi
                 ;;
             $((i-2)))
+                self_update
+                ;;
+            $((i-3)))
                 check_and_download_modules true
                 ;;
             *)
-                if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -gt 0 ] && [ "$choice" -lt $((i-2)) ]; then
+                if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt $((i-3)) ]; then
                     run_module "${MODULE_ORDER[$((choice-1))]}"
                 else
                     print_error "Неверный выбор"
