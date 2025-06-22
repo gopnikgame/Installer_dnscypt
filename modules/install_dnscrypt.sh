@@ -323,6 +323,182 @@ EOF
     return 0
 }
 
+# Настройка автоматического обновления
+setup_auto_update() {
+    log "INFO" "Настройка автоматического обновления DNSCrypt-proxy..."
+    
+    # Создание директории для установки (если используется другой метод)
+    local install_dir="/opt/dnscrypt-proxy"
+    mkdir -p "$install_dir"
+    
+    # Проверка, установлен ли DNSCrypt в этой директории
+    if [ ! -x "$install_dir/dnscrypt-proxy" ] && [ -x "$DNSCRYPT_BIN_PATH" ]; then
+        log "INFO" "Копирование DNSCrypt-proxy в директорию для автообновления..."
+        cp "$DNSCRYPT_BIN_PATH" "$install_dir/"
+        chmod +x "$install_dir/dnscrypt-proxy"
+    fi
+    
+    # Создание скрипта обновления
+    local update_script="/usr/local/bin/dnscrypt-proxy-update.sh"
+    
+    cat > "$update_script" << 'EOL'
+#! /bin/sh
+
+INSTALL_DIR="/opt/dnscrypt-proxy"
+LATEST_URL="https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest"
+DNSCRYPT_PUBLIC_KEY="RWTk1xXqcTODeYttYMCMLo0YJHaFEHn7a3akqHlb/7QvIQXHVPxKbjB5"
+PLATFORM="linux"
+CPU_ARCH="x86_64"
+
+# Определение архитектуры системы
+detect_cpu_arch() {
+    local arch=$(uname -m)
+    case "$arch" in
+        x86_64)
+            CPU_ARCH="x86_64"
+            ;;
+        i*86)
+            CPU_ARCH="i386"
+            ;;
+        aarch64)
+            CPU_ARCH="arm64"
+            ;;
+        armv7*)
+            CPU_ARCH="arm"
+            ;;
+        *)
+            echo "[WARN] Неизвестная архитектура: $arch, используется x86_64 по умолчанию"
+            ;;
+    esac
+    echo "[INFO] Определена архитектура: $CPU_ARCH"
+}
+
+Update() {
+  workdir="$(mktemp -d)"
+  download_url="$(curl -sL "$LATEST_URL" | grep dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}- | grep browser_download_url | head -1 | cut -d \" -f 4)"
+  echo "[INFO] Downloading update from '$download_url'..."
+  download_file="dnscrypt-proxy-update.tar.gz"
+  curl --request GET -sL --url "$download_url" --output "$workdir/$download_file"
+  response=$?
+
+  if [ $response -ne 0 ]; then
+    echo "[ERROR] Could not download file from '$download_url'" >&2
+    rm -Rf "$workdir"
+    return 1
+  fi
+
+  if [ -x "$(command -v minisign)" ]; then
+    curl --request GET -sL --url "${download_url}.minisig" --output "$workdir/${download_file}.minisig"
+    minisign -Vm "$workdir/$download_file" -P "$DNSCRYPT_PUBLIC_KEY"
+    valid_file=$?
+
+    if [ $valid_file -ne 0 ]; then
+      echo "[ERROR] Downloaded file has failed signature verification. Update aborted." >&2
+      rm -Rf "$workdir"
+      return 1
+    fi
+  else
+    echo '[WARN] minisign is not installed, downloaded file signature could not be verified.'
+  fi
+
+  echo '[INFO] Initiating update of DNSCrypt-proxy'
+
+  tar xz -C "$workdir" -f "$workdir/$download_file" ${PLATFORM}-${CPU_ARCH}/dnscrypt-proxy &&
+    mv -f "${INSTALL_DIR}/dnscrypt-proxy" "${INSTALL_DIR}/dnscrypt-proxy.old" &&
+    mv -f "${workdir}/${PLATFORM}-${CPU_ARCH}/dnscrypt-proxy" "${INSTALL_DIR}/" &&
+    chmod u+x "${INSTALL_DIR}/dnscrypt-proxy" &&
+    cd "$INSTALL_DIR" &&
+    ./dnscrypt-proxy -check && ./dnscrypt-proxy -service install 2>/dev/null || : &&
+    ./dnscrypt-proxy -service restart || ./dnscrypt-proxy -service start
+
+  updated_successfully=$?
+
+  rm -Rf "$workdir"
+  if [ $updated_successfully -eq 0 ]; then
+    echo '[INFO] DNSCrypt-proxy has been successfully updated!'
+    return 0
+  else
+    echo '[ERROR] Unable to complete DNSCrypt-proxy update. Update has been aborted.' >&2
+    return 1
+  fi
+}
+
+# Определение архитектуры системы
+detect_cpu_arch
+
+if [ ! -f "${INSTALL_DIR}/dnscrypt-proxy" ]; then
+  echo "[ERROR] DNSCrypt-proxy is not installed in '${INSTALL_DIR}/dnscrypt-proxy'. Update aborted..." >&2
+  exit 1
+fi
+
+local_version=$("${INSTALL_DIR}/dnscrypt-proxy" -version)
+remote_version=$(curl -sL "$LATEST_URL" | grep "tag_name" | head -1 | cut -d \" -f 4)
+
+if [ -z "$local_version" ] || [ -z "$remote_version" ]; then
+  echo "[ERROR] Could not retrieve DNSCrypt-proxy version. Update aborted... " >&2
+  exit 1
+else
+  echo "[INFO] local_version=$local_version, remote_version=$remote_version"
+fi
+
+if [ "$local_version" != "$remote_version" ]; then
+  echo "[INFO] local_version not synced with remote_version, initiating update..."
+  Update
+  exit $?
+else
+  echo "[INFO] No updated needed."
+  exit 0
+fi
+EOL
+
+    # Установка прав доступа и проверка скрипта
+    chmod +x "$update_script"
+    
+    log "INFO" "Создание задания cron для автоматического обновления..."
+    
+    # Создание временного cron-файла
+    local temp_cron=$(mktemp)
+    
+    # Получение текущего crontab
+    crontab -l > "$temp_cron" 2>/dev/null || echo "" > "$temp_cron"
+    
+    # Проверка, существует ли уже задание
+    if ! grep -q "dnscrypt-proxy-update.sh" "$temp_cron"; then
+        # Добавление задания (каждые 12 часов)
+        echo "0 */12 * * * $update_script >> /var/log/dnscrypt-update.log 2>&1" >> "$temp_cron"
+        
+        # Установка нового crontab
+        crontab "$temp_cron"
+        log "SUCCESS" "${GREEN}Задание cron для автоматического обновления успешно добавлено${NC}"
+    else
+        log "INFO" "Задание cron для автоматического обновления уже существует"
+    fi
+    
+    # Удаление временного файла
+    rm -f "$temp_cron"
+    
+    # Опционально: предложение установить minisign
+    if ! command -v minisign &>/dev/null; then
+        log "INFO" "Для проверки подписи обновлений рекомендуется установить minisign:"
+        
+        local distro=$(detect_distro)
+        if [ "$distro" = "ubuntu" ] || [ "$distro" = "debian" ]; then
+            log "INFO" "sudo apt install -y minisign"
+        else
+            log "INFO" "Установите minisign согласно документации вашего дистрибутива"
+        fi
+    else
+        log "SUCCESS" "${GREEN}minisign уже установлен для проверки подписей${NC}"
+    fi
+    
+    # Запуск скрипта обновления для проверки
+    log "INFO" "Проверка работы скрипта обновления..."
+    $update_script
+    
+    log "SUCCESS" "${GREEN}Автоматическое обновление DNSCrypt-proxy настроено${NC}"
+    return 0
+}
+
 # Проверка работы DNSCrypt
 test_dnscrypt() {
     log "INFO" "Проверка работы DNSCrypt-proxy..."
@@ -394,6 +570,9 @@ install_dnscrypt() {
     # Проверка и настройка dnsmasq
     check_and_configure_dnsmasq
     
+    # Настройка автоматического обновления
+    setup_auto_update
+    
     # Тестирование установки
     if test_dnscrypt; then
         log "SUCCESS" "${GREEN}DNSCrypt-proxy успешно установлен и настроен!${NC}"
@@ -403,6 +582,7 @@ install_dnscrypt() {
     
     log "INFO" "Для проверки локального DNS: dig @127.0.0.1 example.com"
     log "INFO" "Для перезапуска DNSCrypt-proxy: sudo dnscrypt-proxy -service restart"
+    log "INFO" "Для ручного запуска обновления: sudo /usr/local/bin/dnscrypt-proxy-update.sh"
     
     return 0
 }
