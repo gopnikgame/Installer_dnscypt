@@ -23,7 +23,6 @@ declare -A MODULES=(
     ["clear_cache.sh"]="Очистка кэша"
     ["backup.sh"]="Создание резервной копии"
     ["restore.sh"]="Восстановление из резервной копии"
-    ["configure_3xui_dns.sh"]="Настройка DNS для 3x-ui"
 )
 
 # Функция логирования
