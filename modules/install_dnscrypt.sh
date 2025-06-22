@@ -70,10 +70,7 @@ get_architecture() {
 
 # Получение последней версии DNSCrypt
 get_latest_version() {
-    log "INFO" "Определение последней версии DNSCrypt-proxy..."
-    
     # Получение последней версии с GitHub API
-    # Добавляем -s для тихого режима, чтобы вывод не перемешивался
     local api_response=$(curl -s "https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest")
     local latest_version=$(echo "$api_response" | jq -r '.tag_name')
     
@@ -84,7 +81,7 @@ get_latest_version() {
     else
         # Удаляем 'v' из начала версии
         latest_version=${latest_version#v}
-        log "SUCCESS" "Последняя версия DNSCrypt-proxy: ${GREEN}$latest_version${NC}"
+        log "INFO" "Найдена последняя версия DNSCrypt-proxy: ${GREEN}$latest_version${NC}"
     fi
     
     echo "$latest_version"
@@ -107,7 +104,7 @@ install_dnscrypt() {
     fi
     
     # Получение последней версии
-    local version=$(get_latest_version | tr -d '\n')
+    local version=$(get_latest_version | tr -d '\n\r')
     # Проверка, что версия получена правильно
     if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         log "ERROR" "${RED}Неверный формат версии: '$version'. Использую версию по умолчанию 2.1.12${NC}"
@@ -127,19 +124,19 @@ install_dnscrypt() {
     local temp_dir=$(mktemp -d)
     cd "$temp_dir" || exit 1
     
-    local download_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v${version}/dnscrypt-proxy-${arch}-${version}.tar.gz"
+    local download_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${version}/dnscrypt-proxy-${arch}-${version}.tar.gz"
     log "INFO" "Загрузка DNSCrypt-proxy версии ${version} для архитектуры ${arch}..."
     log "INFO" "URL загрузки: ${download_url}"
     
     # Улучшенная загрузка с проверками
-    if ! curl -L --retry 3 --retry-delay 2 -o dnscrypt.tar.gz "$download_url"; then
+    if ! curl -L --fail --retry 3 --retry-delay 2 -o dnscrypt.tar.gz "$download_url"; then
         log "ERROR" "${RED}Не удалось загрузить DNSCrypt с URL: $download_url${NC}"
         
         # Альтернативный подход - прямая ссылка на последнюю стабильную версию
-        local fallback_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.12/dnscrypt-proxy-${arch}-2.1.12.tar.gz"
+        local fallback_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.12/dnscrypt-proxy-${arch}-2.1.12.tar.gz"
         log "INFO" "Пробуем резервный URL: ${fallback_url}"
         
-        if ! curl -L --retry 3 --retry-delay 2 -o dnscrypt.tar.gz "$fallback_url"; then
+        if ! curl -L --fail --retry 3 --retry-delay 2 -o dnscrypt.tar.gz "$fallback_url"; then
             log "ERROR" "${RED}Не удалось загрузить DNSCrypt даже с резервного URL${NC}"
             return 1
         fi
