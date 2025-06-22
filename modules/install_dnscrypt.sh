@@ -73,16 +73,20 @@ get_latest_version() {
     log "INFO" "Определение последней версии DNSCrypt-proxy..."
     
     # Получение последней версии с GitHub API
-    local latest_version=$(curl -s https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest | jq -r '.tag_name')
+    # Добавляем -s для тихого режима, чтобы вывод не перемешивался
+    local api_response=$(curl -s "https://api.github.com/repos/DNSCrypt/dnscrypt-proxy/releases/latest")
+    local latest_version=$(echo "$api_response" | jq -r '.tag_name')
     
     if [ -z "$latest_version" ] || [ "$latest_version" = "null" ]; then
-        log "ERROR" "${RED}Не удалось определить последнюю версию${NC}"
-        return 1
+        # Резервный вариант - жестко заданная версия
+        latest_version="2.1.12"
+        log "WARNING" "${YELLOW}Не удалось получить версию через API, используем версию по умолчанию: $latest_version${NC}"
+    else
+        # Удаляем 'v' из начала версии
+        latest_version=${latest_version#v}
+        log "SUCCESS" "Последняя версия DNSCrypt-proxy: ${GREEN}$latest_version${NC}"
     fi
     
-    # Удаляем 'v' из начала версии
-    latest_version=${latest_version#v}
-    log "SUCCESS" "Последняя версия DNSCrypt-proxy: ${GREEN}$latest_version${NC}"
     echo "$latest_version"
 }
 
@@ -103,9 +107,11 @@ install_dnscrypt() {
     fi
     
     # Получение последней версии
-    local version=$(get_latest_version)
-    if [ $? -ne 0 ]; then
-        return 1
+    local version=$(get_latest_version | tr -d '\n')
+    # Проверка, что версия получена правильно
+    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        log "ERROR" "${RED}Неверный формат версии: '$version'. Использую версию по умолчанию 2.1.12${NC}"
+        version="2.1.12"
     fi
     
     # Создание пользователя
@@ -122,35 +128,45 @@ install_dnscrypt() {
     cd "$temp_dir" || exit 1
     
     local download_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v${version}/dnscrypt-proxy-${arch}-${version}.tar.gz"
-    log "INFO" "Загрузка DNSCrypt-proxy v${version} для архитектуры ${arch}..."
+    log "INFO" "Загрузка DNSCrypt-proxy версии ${version} для архитектуры ${arch}..."
+    log "INFO" "URL загрузки: ${download_url}"
     
     # Улучшенная загрузка с проверками
     if ! curl -L --retry 3 --retry-delay 2 -o dnscrypt.tar.gz "$download_url"; then
         log "ERROR" "${RED}Не удалось загрузить DNSCrypt с URL: $download_url${NC}"
-        return 1
+        
+        # Альтернативный подход - прямая ссылка на последнюю стабильную версию
+        local fallback_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/v2.1.12/dnscrypt-proxy-${arch}-2.1.12.tar.gz"
+        log "INFO" "Пробуем резервный URL: ${fallback_url}"
+        
+        if ! curl -L --retry 3 --retry-delay 2 -o dnscrypt.tar.gz "$fallback_url"; then
+            log "ERROR" "${RED}Не удалось загрузить DNSCrypt даже с резервного URL${NC}"
+            return 1
+        fi
+        
+        version="2.1.12"
+        log "INFO" "Используем версию 2.1.12 из резервного источника"
     fi
     
     # Проверяем размер загруженного файла
     local file_size=$(stat -c%s "dnscrypt.tar.gz" 2>/dev/null || stat -f%z "dnscrypt.tar.gz")
+    log "INFO" "Размер загруженного архива: $file_size байт"
+    
     if [ "$file_size" -lt 1000000 ]; then
         log "ERROR" "${RED}Размер загруженного файла слишком мал: $file_size байт${NC}"
-        log "INFO" "Попытка загрузки напрямую через curl..."
-        
-        # Попытка альтернативной загрузки через curl
-        curl -L --retry 3 -o dnscrypt.tar.gz "$download_url"
-        file_size=$(stat -c%s "dnscrypt.tar.gz" 2>/dev/null || stat -f%z "dnscrypt.tar.gz")
-        if [ "$file_size" -lt 1000000 ]; then
-            log "ERROR" "${RED}Не удалось загрузить архив нормального размера${NC}"
-            return 1
-        fi
+        return 1
     fi
     
     # Распаковка с дополнительной проверкой
     log "INFO" "Распаковка архива..."
-    if ! tar -xzvf dnscrypt.tar.gz; then
+    if ! tar -xzf dnscrypt.tar.gz; then
         log "ERROR" "${RED}Ошибка распаковки архива${NC}"
         return 1
     fi
+    
+    # Вывод содержимого текущей директории для отладки
+    log "INFO" "Содержимое распакованного архива:"
+    ls -la
     
     # Поиск исполняемого файла
     log "INFO" "Поиск исполняемого файла dnscrypt-proxy..."
@@ -158,9 +174,6 @@ install_dnscrypt() {
     
     if [ -z "$dnscrypt_binary" ]; then
         log "ERROR" "${RED}Не удалось найти исполняемый файл dnscrypt-proxy в архиве${NC}"
-        # Вывод содержимого архива для отладки
-        log "INFO" "Содержимое распакованного архива:"
-        find . -type f | sort
         return 1
     else
         log "SUCCESS" "Найден исполняемый файл: $dnscrypt_binary"
