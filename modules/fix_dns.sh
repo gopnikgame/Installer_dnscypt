@@ -761,6 +761,246 @@ list_available_odoh_relays() {
     grep -A 1 "^## " "$relays_cache" | grep -v "^--" | sed 'N;s/\n/ - /' | sed 's/## //' | nl
 }
 
+# Функция для настройки балансировки нагрузки
+configure_load_balancing() {
+    log "INFO" "Настройка стратегии балансировки нагрузки..."
+    
+    echo -e "\n${BLUE}Стратегии балансировки нагрузки:${NC}"
+    echo "Стратегия балансировки определяет, как выбираются серверы для запросов из отсортированного списка (от самого быстрого к самому медленному)."
+    echo
+    echo "Доступные стратегии:"
+    echo -e "${YELLOW}first${NC} - всегда выбирается самый быстрый сервер" 
+    echo -e "${YELLOW}p2${NC} - случайный выбор из 2 самых быстрых серверов (рекомендуется)"
+    echo -e "${YELLOW}ph${NC} - случайный выбор из быстрейшей половины серверов"
+    echo -e "${YELLOW}random${NC} - случайный выбор из всех серверов"
+    echo
+    
+    # Получаем текущую стратегию
+    local current_strategy=$(grep "lb_strategy = " "$DNSCRYPT_CONFIG" | sed "s/lb_strategy = '\(.*\)'/\1/" | tr -d ' ' || echo "p2")
+    
+    echo -e "Текущая стратегия: ${GREEN}$current_strategy${NC}"
+    echo
+    echo "1) first (самый быстрый сервер)"
+    echo "2) p2 (топ-2 серверов)"
+    echo "3) ph (быстрейшая половина)"
+    echo "4) random (случайный выбор)"
+    echo "0) Отмена"
+    
+    read -p "Выберите стратегию (0-4): " lb_choice
+    
+    local new_strategy=""
+    case $lb_choice in
+        1) new_strategy="first" ;;
+        2) new_strategy="p2" ;;
+        3) new_strategy="ph" ;;
+        4) new_strategy="random" ;;
+        0) return 0 ;;
+        *) 
+            log "ERROR" "${RED}Неверный выбор${NC}"
+            return 1
+            ;;
+    esac
+    
+    if [ -n "$new_strategy" ]; then
+        # Обновляем стратегию в конфиге
+        if grep -q "lb_strategy = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/lb_strategy = .*/lb_strategy = '$new_strategy'/" "$DNSCRYPT_CONFIG"
+        else
+            # Добавляем новую опцию после [sources]
+            sed -i "/\[sources\]/i lb_strategy = '$new_strategy'" "$DNSCRYPT_CONFIG"
+        fi
+        
+        log "SUCCESS" "${GREEN}Стратегия балансировки изменена на '$new_strategy'${NC}"
+        
+        # Перезапускаем службу
+        systemctl restart dnscrypt-proxy
+    fi
+    
+    return 0
+}
+
+# Функция для тестирования времени отклика DNS-серверов
+test_server_latency() {
+    log "INFO" "Тестирование времени отклика DNS-серверов..."
+    
+    echo -e "\n${BLUE}Тестирование времени отклика:${NC}"
+    echo "Этот тест измеряет время ответа каждого настроенного DNS-сервера."
+    echo "Результаты помогут выбрать наиболее быстрые серверы для вашего местоположения."
+    
+    # Проверяем, установлены ли необходимые инструменты
+    if ! command -v dig &> /dev/null; then
+        log "ERROR" "${RED}Утилита 'dig' не установлена. Установите пакет dnsutils.${NC}"
+        return 1
+    fi
+    
+    # Получаем список настроенных серверов
+    local server_list=$(grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = //' | tr -d '[]' | tr -d "'" | tr -d '"' | tr ',' ' ')
+    
+    if [ -z "$server_list" ]; then
+        log "ERROR" "${RED}Не найдены настроенные серверы${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${YELLOW}Настроенные серверы:${NC} $server_list"
+    echo -e "\n${BLUE}Выполняется тестирование, пожалуйста, подождите...${NC}"
+    
+    # Создаем временный файл для результатов
+    local tmp_file=$(mktemp)
+    
+    # Тестируем каждый сервер
+    for server in $server_list; do
+        echo -n "Тестирование сервера $server... "
+        
+        # Получаем текущий IP сервера из логов dnscrypt-proxy
+        local server_ip=$(journalctl -u dnscrypt-proxy -n 100 | grep -i "$server" | grep -o -E "\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1 | tr -d '(' || echo "")
+        
+        if [ -z "$server_ip" ]; then
+            # Если не нашли в логах, пытаемся определить через DNSCrypt-proxy
+            echo -e "${YELLOW}IP не найден в логах${NC}"
+            local best_time="N/A"
+        else
+            # Выполняем несколько запросов для измерения времени отклика
+            local best_time=999999
+            for i in {1..5}; do
+                local time=$(dig @127.0.0.1 +time=2 +tries=1 example.com | grep "Query time" | awk '{print $4}')
+                
+                if [ -n "$time" ] && [ "$time" -lt "$best_time" ]; then
+                    best_time=$time
+                fi
+            done
+            
+            if [ "$best_time" -eq 999999 ]; then
+                best_time="таймаут"
+            else
+                best_time="${best_time}ms"
+            fi
+            
+            # Добавляем результат во временный файл для сортировки
+            if [[ "$best_time" != "таймаут" ]]; then
+                echo "$server $best_time $server_ip" >> "$tmp_file"
+            else
+                echo "$server $best_time" >> "$tmp_file"
+            fi
+            
+            echo -e "${GREEN}$best_time${NC} ($server_ip)"
+        fi
+    done
+    
+    # Сортируем и выводим результаты от самого быстрого к самому медленному
+    if [ -f "$tmp_file" ] && [ -s "$tmp_file" ]; then
+        echo -e "\n${BLUE}Результаты тестирования (отсортированы по времени отклика):${NC}"
+        sort -k2 -n "$tmp_file" | awk '{printf "%-30s %-15s", $1, $2; for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | \
+            awk 'BEGIN {print "Сервер                         Время отклика    IP адрес"; print "----------------------------------------------------------------------"}; {print $0}'
+    fi
+    
+    # Удаляем временный файл
+    rm -f "$tmp_file"
+    
+    # Предложение применить оптимальные настройки
+    echo -e "\n${YELLOW}Хотите настроить DNSCrypt для использования самых быстрых серверов? (y/n):${NC}"
+    read -p "> " configure_fastest
+    
+    if [[ "${configure_fastest,,}" == "y" ]]; then
+        configure_fastest_servers
+    fi
+    
+    return 0
+}
+
+# Функция для настройки самых быстрых серверов
+configure_fastest_servers() {
+    log "INFO" "Настройка самых быстрых серверов..."
+    
+    echo -e "\n${BLUE}Настройка быстрейших серверов:${NC}"
+    echo "1) Использовать только самый быстрый сервер"
+    echo "2) Использовать 2 самых быстрых сервера (рекомендуется)"
+    echo "3) Использовать 3 самых быстрых сервера"
+    echo "4) Ввести количество серверов вручную"
+    echo "0) Отмена"
+    
+    read -p "Выберите опцию (0-4): " fastest_option
+    
+    local num_servers=0
+    case $fastest_option in
+        1) num_servers=1 ;;
+        2) num_servers=2 ;;
+        3) num_servers=3 ;;
+        4)
+            read -p "Введите количество самых быстрых серверов для использования: " custom_num
+            if [[ "$custom_num" =~ ^[0-9]+$ ]] && [ "$custom_num" -gt 0 ]; then
+                num_servers=$custom_num
+            else
+                log "ERROR" "${RED}Неверное количество серверов${NC}"
+                return 1
+            fi
+            ;;
+        0) return 0 ;;
+        *)
+            log "ERROR" "${RED}Неверный выбор${NC}"
+            return 1
+            ;;
+    esac
+    
+    if [ "$num_servers" -gt 0 ]; then
+        # Получаем список серверов, отсортированных по скорости
+        local sorted_servers=$(journalctl -u dnscrypt-proxy -n 1000 | grep "Server with lowest initial latency" | tail -1 | sed 's/.*: //' | tr -d '[]' | tr ',' ' ')
+        
+        if [ -z "$sorted_servers" ]; then
+            log "ERROR" "${RED}Не удалось получить список отсортированных серверов${NC}"
+            echo -e "${YELLOW}Выполните перезапуск DNSCrypt-proxy и повторите попытку позже.${NC}"
+            return 1
+        fi
+        
+        # Выбираем первые N серверов
+        local fastest_servers=()
+        local count=0
+        for server in $sorted_servers; do
+            fastest_servers+=("$server")
+            ((count++))
+            
+            if [ "$count" -ge "$num_servers" ]; then
+                break
+            fi
+        done
+        
+        # Формируем строку серверов для конфигурации
+        local server_names="["
+        for i in "${!fastest_servers[@]}"; do
+            if [ "$i" -gt 0 ]; then
+                server_names+=", "
+            fi
+            server_names+="'${fastest_servers[$i]}'"
+        done
+        server_names+="]"
+        
+        # Обновляем конфигурацию
+        sed -i "s/server_names = .*/server_names = $server_names/" "$DNSCRYPT_CONFIG"
+        
+        # Настраиваем стратегию балансировки
+        local lb_strategy=""
+        if [ "$num_servers" -eq 1 ]; then
+            lb_strategy="first"
+        elif [ "$num_servers" -eq 2 ]; then
+            lb_strategy="p2"
+        else
+            lb_strategy="ph"
+        fi
+        
+        if grep -q "lb_strategy = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/lb_strategy = .*/lb_strategy = '$lb_strategy'/" "$DNSCRYPT_CONFIG"
+        else
+            sed -i "/\[sources\]/i lb_strategy = '$lb_strategy'" "$DNSCRYPT_CONFIG"
+        fi
+        
+        log "SUCCESS" "${GREEN}Настроено использование $num_servers самых быстрых серверов со стратегией $lb_strategy${NC}"
+        
+        # Перезапуск службы
+        systemctl restart dnscrypt-proxy
+    fi
+    
+    return 0
+}
+
 # Настройка дополнительной конфигурации
 configure_additional_settings() {
     echo -e "\n${BLUE}Дополнительные настройки:${NC}"
@@ -848,11 +1088,13 @@ main_menu() {
         echo "1) Проверить текущую конфигурацию"
         echo "2) Настроить Anonymized DNSCrypt"
         echo "3) Настроить Oblivious DoH (ODoH)"
-        echo "4) Дополнительные настройки"
-        echo "5) Перезапустить DNSCrypt-proxy"
+        echo "4) Настроить балансировку нагрузки"
+        echo "5) Тестировать время отклика серверов"
+        echo "6) Дополнительные настройки"
+        echo "7) Перезапустить DNSCrypt-proxy"
         echo "0) Выход"
         
-        read -p "Выберите опцию (0-5): " option
+        read -p "Выберите опцию (0-7): " option
         
         case $option in
             1)
@@ -868,9 +1110,16 @@ main_menu() {
                 ;;
             4)
                 backup_config
-                configure_additional_settings
+                configure_load_balancing
                 ;;
             5)
+                test_server_latency
+                ;;
+            6)
+                backup_config
+                configure_additional_settings
+                ;;
+            7)
                 systemctl restart dnscrypt-proxy
                 log "SUCCESS" "${GREEN}DNSCrypt-proxy перезапущен${NC}"
                 ;;
