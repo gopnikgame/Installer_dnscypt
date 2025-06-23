@@ -19,57 +19,6 @@ log() {
     echo -e "${timestamp} [$1] $2"
 }
 
-# Функция исправления DNS резолвинга
-fix_dns_resolution() {
-    log "INFO" "=== Исправление DNS резолвинга ==="
-    
-    # Проверка работы DNSCrypt
-    if ! dig @127.0.0.1 google.com +short +timeout=5 > /dev/null; then
-        log "ERROR" "DNSCrypt не отвечает на запросы"
-        return 1
-    fi
-    
-    # Создание бэкапа
-    if [ ! -f "${RESOLV_CONF}.backup" ]; then
-        cp "$RESOLV_CONF" "${RESOLV_CONF}.backup"
-        log "INFO" "Создан бэкап resolv.conf"
-    fi
-    
-    # Настройка systemd-resolved
-    if systemctl is-active --quiet systemd-resolved; then
-        log "INFO" "Настройка systemd-resolved..."
-        mkdir -p /etc/systemd/resolved.conf.d/
-        cat > "$RESOLVED_CONF" << EOF
-[Resolve]
-DNS=127.0.0.1
-DNSStubListener=no
-EOF
-        systemctl restart systemd-resolved
-    fi
-    
-    # Настройка resolv.conf
-    log "INFO" "Настройка resolv.conf..."
-    if ! chattr -i "$RESOLV_CONF" 2>/dev/null; then
-        log "INFO" "Снят атрибут immutable"
-    fi
-    
-    echo "nameserver 127.0.0.1" > "$RESOLV_CONF"
-    chattr +i "$RESOLV_CONF"
-    
-    # Проверка
-    if dig google.com +short > /dev/null; then
-        log "SUCCESS" "DNS резолвинг настроен корректно"
-        return 0
-    else
-        log "ERROR" "Проблема с DNS резолвингом"
-        if [ -f "${RESOLV_CONF}.backup" ]; then
-            log "INFO" "Восстановление из бэкапа..."
-            chattr -i "$RESOLV_CONF"
-            cp "${RESOLV_CONF}.backup" "$RESOLV_CONF"
-        fi
-        return 1
-    fi
-}
 
 # Функция проверки текущего DNS сервера
 check_current_dns() {
@@ -163,13 +112,200 @@ check_current_dns() {
     fi
 }
 
-# Основная логика скрипта
+# Функция полного исправления DNS резолвинга
+fix_all_dns_issues() {
+    log "INFO" "=== Полное исправление DNS-резолвинга ==="
+    
+    # 1. Проверяем и исправляем конфигурацию DNSCrypt
+    log "INFO" "Проверка конфигурации DNSCrypt..."
+    if [ -f "$DNSCRYPT_CONFIG" ]; then
+        # Получаем все строки с server_names
+        local server_lines=$(grep -E "^[^#]*server_names" "$DNSCRYPT_CONFIG" || echo "")
+        local disabled_lines=$(grep -E "^disabled_.*server_names" "$DNSCRYPT_CONFIG" || echo "")
+        local commented_lines=$(grep -E "^#.*server_names" "$DNSCRYPT_CONFIG" || echo "")
+        
+        # Если есть отключенные (disabled_) серверы
+        if [ -n "$disabled_lines" ]; then
+            # Получаем список серверов из отключенных строк
+            local disabled_servers=$(echo "$disabled_lines" | sed -E 's/disabled_.*server_names = \[(.*)\]/\1/' | tr -d "'" | tr -d '"')
+            
+            # Удаляем строку с disabled_ и добавляем правильную строку server_names
+            local first_disabled=$(echo "$disabled_lines" | head -1)
+            local line_num=$(grep -n "$first_disabled" "$DNSCRYPT_CONFIG" | cut -d':' -f1)
+            
+            if [ -n "$line_num" ]; then
+                # Удаляем строку
+                sed -i "${line_num}d" "$DNSCRYPT_CONFIG"
+                
+                # Добавляем новую строку server_names
+                sed -i "${line_num}i server_names = [${disabled_servers}]" "$DNSCRYPT_CONFIG"
+                
+                log "SUCCESS" "${GREEN}Активированы ранее отключенные серверы: ${disabled_servers}${NC}"
+            fi
+        # Если нет активных server_names, но есть закомментированные
+        elif [ -z "$server_lines" ] && [ -n "$commented_lines" ]; then
+            # Получаем первую закомментированную строку
+            local first_commented=$(echo "$commented_lines" | head -1)
+            local servers_list=$(echo "$first_commented" | sed -E 's/#.*server_names = \[(.*)\]/\1/' | tr -d "'" | tr -d '"')
+            
+            # Добавляем раскомментированную строку
+            local line_num=$(grep -n "$first_commented" "$DNSCRYPT_CONFIG" | cut -d':' -f1)
+            
+            if [ -n "$line_num" ]; then
+                # Удаляем закомментированную строку
+                sed -i "${line_num}d" "$DNSCRYPT_CONFIG"
+                
+                # Добавляем раскомментированную строку
+                sed -i "${line_num}i server_names = [${servers_list}]" "$DNSCRYPT_CONFIG"
+                
+                log "SUCCESS" "${GREEN}Активированы ранее закомментированные серверы: ${servers_list}${NC}"
+            fi
+        # Если нет ни активных, ни отключенных, ни закомментированных server_names
+        elif [ -z "$server_lines" ] && [ -z "$disabled_lines" ] && [ -z "$commented_lines" ]; then
+            # Добавляем настройки по умолчанию
+            sed -i "/\[sources\]/i server_names = ['cloudflare']" "$DNSCRYPT_CONFIG"
+            log "SUCCESS" "${GREEN}Добавлен сервер Cloudflare по умолчанию${NC}"
+        fi
+        
+        # Перезапускаем службу DNSCrypt
+        log "INFO" "Перезапуск DNSCrypt-proxy..."
+        systemctl restart dnscrypt-proxy || {
+            log "ERROR" "${RED}Не удалось перезапустить DNSCrypt-proxy${NC}"
+            return 1
+        }
+        
+        # Даем время на запуск службы
+        sleep 2
+    else
+        log "ERROR" "${RED}Не найден файл конфигурации DNSCrypt${NC}"
+        return 1
+    fi
+    
+    # 2. Настраиваем systemd-resolved
+    if command -v resolvectl >/dev/null 2>&1; then
+        log "INFO" "Настройка systemd-resolved..."
+        
+        # Создаем конфигурационный файл для systemd-resolved
+        mkdir -p /etc/systemd/resolved.conf.d/
+        cat > "$RESOLVED_CONF" << EOF
+[Resolve]
+DNS=127.0.0.1
+DNSStubListener=no
+EOF
+        
+        # Перезапускаем systemd-resolved
+        systemctl restart systemd-resolved || {
+            log "WARN" "${YELLOW}Не удалось перезапустить systemd-resolved${NC}"
+        }
+    fi
+    
+    # 3. Настраиваем resolv.conf
+    log "INFO" "Настройка resolv.conf..."
+    
+    # Снимаем защиту от записи, если она есть
+    if ! chattr -i "$RESOLV_CONF" 2>/dev/null; then
+        log "INFO" "Снят атрибут immutable с resolv.conf"
+    fi
+    
+    # Сохраняем бэкап, если еще нет
+    if [ ! -f "${RESOLV_CONF}.backup" ]; then
+        cp "$RESOLV_CONF" "${RESOLV_CONF}.backup"
+        log "INFO" "Создан бэкап resolv.conf"
+    fi
+    
+    # Записываем новый resolv.conf
+    cat > "$RESOLV_CONF" << EOF
+# Сгенерировано DNSCrypt Manager
+nameserver 127.0.0.1
+options edns0
+EOF
+    
+    # Защищаем от изменений
+    chattr +i "$RESOLV_CONF" 2>/dev/null && log "INFO" "Установлен атрибут immutable на resolv.conf"
+    
+    # 4. Проверяем, что DNSCrypt работает правильно
+    log "INFO" "Проверка работы DNSCrypt..."
+    if dig @127.0.0.1 cloudflare.com +short +timeout=5 > /dev/null 2>&1; then
+        local serve_time=$(dig @127.0.0.1 cloudflare.com +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
+        log "SUCCESS" "${GREEN}DNSCrypt работает корректно! Время ответа: ${serve_time}ms${NC}"
+        
+        # Проверяем используемый сервер
+        echo -e "${YELLOW}Проверка используемого DNS-сервера:${NC}"
+        local dns_info=$(dig +short whoami.akamai.net TXT | sed 's/"//g')
+        if [ -n "$dns_info" ]; then
+            echo -e "  Текущий DNS-сервер: ${GREEN}$dns_info${NC}"
+        else
+            echo -e "  ${YELLOW}Не удалось определить используемый DNS-сервер${NC}"
+        fi
+        
+        # Отображаем информацию об активном сервере из логов DNSCrypt
+        local active_server=$(journalctl -u dnscrypt-proxy -n 20 | grep -E "Server with lowest|Using server" | tail -n 1)
+        if [ -n "$active_server" ]; then
+            echo -e "  ${GREEN}Активный DNSCrypt сервер: $active_server${NC}"
+        fi
+        
+        return 0
+    else
+        log "ERROR" "${RED}DNSCrypt не работает корректно!${NC}"
+        
+        # Проверяем, запущена ли служба
+        if ! systemctl is-active --quiet dnscrypt-proxy; then
+            log "ERROR" "${RED}Служба DNSCrypt-proxy не запущена!${NC}"
+            systemctl start dnscrypt-proxy
+        fi
+        
+        # Проверяем порты
+        echo -e "${YELLOW}Проверка прослушиваемых портов:${NC}"
+        ss -tulpn | grep ':53' || echo "  ${RED}Не найдены процессы, слушающие порт 53${NC}"
+        
+        # Проверяем логи на ошибки
+        echo -e "${YELLOW}Последние ошибки в логах DNSCrypt:${NC}"
+        journalctl -u dnscrypt-proxy -n 20 --grep="error|failed|warning" --no-pager
+        
+        return 1
+    fi
+}
+
+# Добавляем новый пункт в функцию main для вызова функции исправления
 main() {
     # Запуск проверки DNS
     check_current_dns
     
-    # Если нужно исправить DNS, раскомментируйте следующую строку
-    # fix_dns_resolution
+    # Проверяем, идет ли DNS-резолвинг через локальный DNSCrypt
+    echo -e "\n${BLUE}Проверка маршрутизации DNS-запросов...${NC}"
+    local is_local_dns=1
+    
+    # Проверка содержимого resolv.conf
+    if ! grep -q "nameserver 127.0.0.1" "$RESOLV_CONF" && ! grep -q "nameserver ::1" "$RESOLV_CONF"; then
+        is_local_dns=0
+        echo -e "${RED}Проблема:${NC} В файле resolv.conf не настроен локальный DNS (127.0.0.1)"
+    fi
+    
+    # Проверка работы DNSCrypt
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        is_local_dns=0
+        echo -e "${RED}Проблема:${NC} Служба DNSCrypt-proxy не запущена"
+    fi
+    
+    # Проверка разрешения имен через DNSCrypt
+    if ! dig @127.0.0.1 cloudflare.com +short +timeout=5 > /dev/null 2>&1; then
+        is_local_dns=0
+        echo -e "${RED}Проблема:${NC} DNSCrypt не отвечает на DNS-запросы"
+    fi
+    
+    # Предлагаем пользователю исправить проблемы, если они есть
+    if [ $is_local_dns -eq 0 ]; then
+        echo -e "\n${YELLOW}Обнаружены проблемы с DNS-резолвингом.${NC}"
+        echo -e "${RED}DNS-запросы не проходят через DNSCrypt, что снижает безопасность и приватность!${NC}"
+        echo -e "${YELLOW}Хотите исправить проблему с DNS-резолвингом? (y/n)${NC}"
+        read -p "> " fix_dns
+        
+        if [[ "${fix_dns,,}" == "y" ]]; then
+            fix_all_dns_issues
+        fi
+    else
+        echo -e "\n${GREEN}DNS-резолвинг работает через DNSCrypt корректно.${NC}"
+    fi
 }
 
 # Запуск главной функции
