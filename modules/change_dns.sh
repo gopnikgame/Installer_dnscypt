@@ -690,6 +690,327 @@ EOL
     return 0
 }
 
+# Добавляем функцию выбора серверов по географическим локациям
+configure_geo_servers() {
+    echo -e "\n${BLUE}Выбор DNS серверов по географическому расположению:${NC}"
+    echo "1) Северная Америка (Торонто, Лос-Анджелес)"
+    echo "2) Европа (Амстердам, Франкфурт, Париж)"
+    echo "3) Азия (Токио, Фуджейра, Сидней)"
+    echo "4) Ручной выбор основного сервера"
+    echo "0) Отмена"
+    
+    read -p "Выберите регион (0-4): " geo_choice
+    
+    local server_name=""
+    case $geo_choice in
+        1)
+            echo -e "\n${BLUE}Доступные серверы Северной Америки:${NC}"
+            echo "1) dnscry.pt-toronto (Торонто, Канада)"
+            echo "2) dnscry.pt-losangeles (Лос-Анджелес, США)"
+            echo "0) Назад"
+            
+            read -p "Выберите основной сервер (0-2): " na_choice
+            
+            case $na_choice in
+                1)
+                    server_name="['dnscry.pt-toronto', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Торонто с резервными серверами"
+                    ;;
+                2)
+                    server_name="['dnscry.pt-losangeles', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Лос-Анджелес с резервными серверами"
+                    ;;
+                0)
+                    return 0
+                    ;;
+                *)
+                    log "ERROR" "Неверный выбор"
+                    return 1
+                    ;;
+            esac
+            ;;
+        2)
+            echo -e "\n${BLUE}Доступные серверы Европы:${NC}"
+            echo "1) dnscry.pt-amsterdam (Амстердам, Нидерланды)"
+            echo "2) dnscry.pt-frankfurt (Франкфурт, Германия)"
+            echo "3) dnscry.pt-paris (Париж, Франция)"
+            echo "0) Назад"
+            
+            read -p "Выберите основной сервер (0-3): " eu_choice
+            
+            case $eu_choice in
+                1)
+                    server_name="['dnscry.pt-amsterdam', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Амстердам с резервными серверами"
+                    ;;
+                2)
+                    server_name="['dnscry.pt-frankfurt', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Франкфурт с резервными серверами"
+                    ;;
+                3)
+                    server_name="['dnscry.pt-paris', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Париж с резервными серверами"
+                    ;;
+                0)
+                    return 0
+                    ;;
+                *)
+                    log "ERROR" "Неверный выбор"
+                    return 1
+                    ;;
+            esac
+            ;;
+        3)
+            echo -e "\n${BLUE}Доступные серверы Азии и Океании:${NC}"
+            echo "1) dnscry.pt-tokyo (Токио, Япония)"
+            echo "2) dnscry.pt-fujairah (Фуджейра, ОАЭ)"
+            echo "3) dnscry.pt-sydney02 (Сидней, Австралия)"
+            echo "0) Назад"
+            
+            read -p "Выберите основной сервер (0-3): " asia_choice
+            
+            case $asia_choice in
+                1)
+                    server_name="['dnscry.pt-tokyo', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Токио с резервными серверами"
+                    ;;
+                2)
+                    server_name="['dnscry.pt-fujairah', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Фуджейра с резервными серверами"
+                    ;;
+                3)
+                    server_name="['dnscry.pt-sydney02', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+                    log "INFO" "Выбран сервер Сидней с резервными серверами"
+                    ;;
+                0)
+                    return 0
+                    ;;
+                *)
+                    log "ERROR" "Неверный выбор"
+                    return 1
+                    ;;
+            esac
+            ;;
+        4)
+            echo -e "\n${BLUE}Все доступные серверы dnscry.pt:${NC}"
+            echo "1) dnscry.pt-amsterdam (Амстердам, Нидерланды)"
+            echo "2) dnscry.pt-frankfurt (Франкфурт, Германия)"
+            echo "3) dnscry.pt-paris (Париж, Франция)"
+            echo "4) dnscry.pt-toronto (Торонто, Канада)"
+            echo "5) dnscry.pt-losangeles (Лос-Анджелес, США)"
+            echo "6) dnscry.pt-tokyo (Токио, Япония)"
+            echo "7) dnscry.pt-fujairah (Фуджейра, ОАЭ)"
+            echo "8) dnscry.pt-sydney02 (Сидней, Австралия)"
+            echo "0) Назад"
+            
+            read -p "Выберите основной сервер (0-8): " manual_choice
+            
+            local primary_server=""
+            case $manual_choice in
+                1) primary_server="dnscry.pt-amsterdam" ;;
+                2) primary_server="dnscry.pt-frankfurt" ;;
+                3) primary_server="dnscry.pt-paris" ;;
+                4) primary_server="dnscry.pt-toronto" ;;
+                5) primary_server="dnscry.pt-losangeles" ;;
+                6) primary_server="dnscry.pt-tokyo" ;;
+                7) primary_server="dnscry.pt-fujairah" ;;
+                8) primary_server="dnscry.pt-sydney02" ;;
+                0) return 0 ;;
+                *) 
+                    log "ERROR" "Неверный выбор"
+                    return 1
+                    ;;
+            esac
+            
+            server_name="['$primary_server', 'cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']"
+            log "INFO" "Выбран сервер $primary_server с резервными серверами"
+            ;;
+        0)
+            return 0
+            ;;
+        *)
+            log "ERROR" "Неверный выбор"
+            return 1
+            ;;
+    esac
+    
+    # Если сервер был выбран, обновляем настройки
+    if [ -n "$server_name" ]; then
+        # Обновляем основные настройки серверов
+        sed -i "s/server_names = .*/server_names = $server_name/" "$DNSCRYPT_CONFIG"
+        
+        # Настраиваем балансировку нагрузки
+        if grep -q "lb_strategy = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/lb_strategy = .*/lb_strategy = 'ph'/" "$DNSCRYPT_CONFIG"
+        else
+            sed -i "/server_names = /a lb_strategy = 'ph'" "$DNSCRYPT_CONFIG"
+        fi
+        
+        # Настраиваем таймаут
+        if grep -q "timeout = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/timeout = .*/timeout = 2500/" "$DNSCRYPT_CONFIG"
+        else
+            sed -i "/lb_strategy = /a timeout = 2500" "$DNSCRYPT_CONFIG"
+        fi
+        
+        # Настраиваем проверку доступности серверов
+        configure_server_availability
+        
+        log "INFO" "DNS серверы изменены на $server_name"
+        
+        # Перезапуск службы
+        systemctl restart dnscrypt-proxy
+        sleep 2
+        
+        verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
+    fi
+    
+    return 0
+}
+
+# Функция для настройки доступности серверов
+configure_server_availability() {
+    log "INFO" "Настройка проверки доступности серверов..."
+    
+    # Проверка и настройка bootstrap_resolvers
+    if grep -q "bootstrap_resolvers = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/bootstrap_resolvers = .*/bootstrap_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']/" "$DNSCRYPT_CONFIG"
+    else
+        sed -i "/\[sources\]/i bootstrap_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']" "$DNSCRYPT_CONFIG"
+    fi
+    
+    # Игнорирование системных DNS
+    if grep -q "ignore_system_dns = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/ignore_system_dns = .*/ignore_system_dns = true/" "$DNSCRYPT_CONFIG"
+    else
+        sed -i "/bootstrap_resolvers = /a ignore_system_dns = true" "$DNSCRYPT_CONFIG"
+    fi
+    
+    # Настройка netprobe_timeout
+    if grep -q "netprobe_timeout = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/netprobe_timeout = .*/netprobe_timeout = 10/" "$DNSCRYPT_CONFIG"
+    else
+        sed -i "/ignore_system_dns = /a netprobe_timeout = 10" "$DNSCRYPT_CONFIG"
+    fi
+    
+    # Настройка netprobe_address
+    if grep -q "netprobe_address = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/netprobe_address = .*/netprobe_address = '1.1.1.1:53'/" "$DNSCRYPT_CONFIG"
+    else
+        sed -i "/netprobe_timeout = /a netprobe_address = '1.1.1.1:53'" "$DNSCRYPT_CONFIG"
+    fi
+    
+    # Настройка fallback_resolvers
+    if grep -q "fallback_resolvers = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/fallback_resolvers = .*/fallback_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']/" "$DNSCRYPT_CONFIG"
+    else
+        sed -i "/netprobe_address = /a fallback_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']" "$DNSCRYPT_CONFIG"
+    fi
+    
+    # Настройка blocked_query_response
+    if grep -q "blocked_query_response = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/blocked_query_response = .*/blocked_query_response = 'refused'/" "$DNSCRYPT_CONFIG"
+    else
+        sed -i "/fallback_resolvers = /a blocked_query_response = 'refused'" "$DNSCRYPT_CONFIG"
+    fi
+    
+    # Настройка параметров определения недоступных серверов
+    local availability_settings=(
+        "max_server_connections = 10"
+        "max_failures = 3"
+        "max_silent_failures = 5"
+        "refresh_delay = 30"
+        "log_files_max_size = 10"
+        "log_files_max_age = 7"
+        "log_files_max_backups = 2"
+        "use_servers_names = true"
+    )
+    
+    # Вставляем настройки
+    local last_param="blocked_query_response = 'refused'"
+    for setting in "${availability_settings[@]}"; do
+        param_name=$(echo "$setting" | cut -d' ' -f1)
+        
+        if grep -q "$param_name = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/$param_name = .*/$setting/" "$DNSCRYPT_CONFIG"
+        else
+            sed -i "/$last_param/a $setting" "$DNSCRYPT_CONFIG"
+            last_param="$setting"
+        fi
+    done
+    
+    # Добавление служебных настроек
+    local service_settings=(
+        "tls_cipher_suites = []"
+        "handle_dot_within_domain = true"
+        "enable_hot_reload = true"
+    )
+    
+    local last_param="use_servers_names = true"
+    for setting in "${service_settings[@]}"; do
+        param_name=$(echo "$setting" | cut -d' ' -f1)
+        
+        if grep -q "$param_name = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/$param_name = .*/$setting/" "$DNSCRYPT_CONFIG"
+        else
+            sed -i "/$last_param/a $setting" "$DNSCRYPT_CONFIG"
+            last_param="$setting"
+        fi
+    done
+    
+    log "SUCCESS" "${GREEN}Настройки доступности серверов обновлены${NC}"
+}
+
+# Функция для расширенной проверки конфигурации
+extended_verify_config() {
+    echo -e "\n${BLUE}Расширенная проверка конфигурации DNSCrypt:${NC}"
+    
+    # Проверка конфигурации
+    if cd "$(dirname "$DNSCRYPT_CONFIG")" && dnscrypt-proxy -check; then
+        log "SUCCESS" "${GREEN}Конфигурация успешно проверена${NC}"
+        
+        # Проверка активных DNS-серверов
+        echo -e "\n${YELLOW}==== DNSCrypt активные соединения ====${NC}"
+        journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Connected to|Server with lowest" | tail -10
+
+        echo -e "\n${YELLOW}==== Текущий DNS сервер ====${NC}"
+        dig +short resolver.dnscrypt.info TXT | tr -d '"'
+
+        echo -e "\n${YELLOW}==== Тестирование доступности серверов ====${NC}"
+        for domain in google.com cloudflare.com facebook.com example.com; do
+            echo -n "Запрос $domain: "
+            time=$(dig @127.0.0.1 +noall +stats "$domain" | grep "Query time" | awk '{print $4}')
+            if [ -n "$time" ]; then
+                echo -e "${GREEN}OK ($time ms)${NC}"
+            else
+                echo -e "${RED}ОШИБКА${NC}"
+            fi
+        done
+
+        echo -e "\n${YELLOW}==== Проверка DNSSEC ====${NC}"
+        dig @127.0.0.1 dnssec-tools.org +dnssec +short
+        
+        # Проверка используемого протокола
+        echo -e "\n${YELLOW}==== Информация о протоколе ====${NC}"
+        local protocol_info=$(journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Using protocol|Using transport" | tail -1)
+        if [ -n "$protocol_info" ]; then
+            echo -e "${GREEN}$protocol_info${NC}"
+        else
+            echo -e "${YELLOW}Информация о протоколе не найдена${NC}"
+        fi
+        
+        # Проверка индикатора загрузки
+        local load_info=$(systemctl status dnscrypt-proxy | grep "Memory\|CPU")
+        if [ -n "$load_info" ]; then
+            echo -e "\n${YELLOW}==== Ресурсы системы ====${NC}"
+            echo "$load_info"
+        fi
+        
+    else
+        log "ERROR" "${RED}Ошибка в конфигурации${NC}"
+    fi
+}
+
 # Основная функция изменения DNS
 change_dns() {
     log "INFO" "=== Настройка DNSCrypt ==="
@@ -705,17 +1026,23 @@ change_dns() {
         check_current_settings
     
         echo -e "\n${BLUE}Меню настройки DNSCrypt:${NC}"
-        echo "1) Изменить DNS сервер"
-        echo "2) Настройки безопасности (DNSSEC, NoLog, NoFilter)"
-        echo "3) Настройки протоколов (IPv4/IPv6, DNSCrypt/DoH/ODoH)"
-        echo "4) Расширенные настройки"
-        echo "5) Проверить текущую конфигурацию"
+        echo "1) Настройка серверов по географическому расположению"
+        echo "2) Изменить DNS сервер вручную"
+        echo "3) Настройки безопасности (DNSSEC, NoLog, NoFilter)"
+        echo "4) Настройки протоколов (IPv4/IPv6, DNSCrypt/DoH/ODoH)"
+        echo "5) Расширенные настройки"
+        echo "6) Проверить текущую конфигурацию"
         echo "0) Выход"
         
-        read -p "Выберите опцию (0-5): " main_choice
+        read -p "Выберите опцию (0-6): " main_choice
         
         case $main_choice in
             1)
+                configure_geo_servers
+                ;;
+            
+            2)
+                # Оставляем прежний пункт меню с ручным выбором сервера
                 echo -e "\n${BLUE}Доступные предустановленные серверы:${NC}"
                 echo "1) cloudflare (Cloudflare)"
                 echo "2) google (Google DNS)"
@@ -781,10 +1108,10 @@ change_dns() {
                     sleep 2
                     
                     verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
-                fi
+                }
                 ;;
             
-            2)
+            3)
                 echo -e "\n${BLUE}Настройки безопасности:${NC}"
                 
                 read -p "Включить DNSSEC (проверка криптографических подписей)? (y/n): " dnssec
@@ -811,7 +1138,7 @@ change_dns() {
                 sleep 2
                 ;;
                 
-            3)
+            4)
                 echo -e "\n${BLUE}Настройки протоколов:${NC}"
                 
                 read -p "Использовать серверы IPv4? (y/n): " ipv4
@@ -848,28 +1175,12 @@ change_dns() {
                 sleep 2
                 ;;
                 
-            4)
+            5)
                 advanced_settings
                 ;;
                 
-            5)
-                echo -e "\n${BLUE}Проверка текущей конфигурации:${NC}"
-                
-                # Запуск проверки конфигурации
-                if cd "$(dirname "$DNSCRYPT_CONFIG")" && dnscrypt-proxy -check; then
-                    log "SUCCESS" "${GREEN}Конфигурация успешно проверена${NC}"
-                    
-                    # Проверка резолвинга
-                    echo -e "\n${BLUE}Проверка резолвинга:${NC}"
-                    verify_settings "$(grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = //' | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
-                    
-                    # Проверка списка доступных резолверов
-                    echo -e "\n${BLUE}Список доступных резолверов:${NC}"
-                    dnscrypt-proxy -list | head -n 20
-                    echo "..."
-                else
-                    log "ERROR" "${RED}Ошибка в конфигурации${NC}"
-                fi
+            6)
+                extended_verify_config
                 ;;
                 
             0)
