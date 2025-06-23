@@ -833,12 +833,29 @@ test_server_latency() {
         return 1
     fi
     
-    # Получаем список настроенных серверов
-    local server_list=$(grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = //' | tr -d '[]' | tr -d "'" | tr -d '"' | tr ',' ' ')
+    # Получаем список настроенных серверов (корректный парсинг)
+    local server_names_line=$(grep "server_names" "$DNSCRYPT_CONFIG" | head -1)
     
-    if [ -z "$server_list" ]; then
-        log "ERROR" "${RED}Не найдены настроенные серверы${NC}"
+    # Проверим, что строка найдена и имеет нужный формат
+    if [ -z "$server_names_line" ]; then
+        log "ERROR" "${RED}Настроенные серверы не найдены в конфигурации${NC}"
         return 1
+    fi
+    
+    # Извлекаем только значение массива серверов, используя регулярное выражение
+    local server_list=$(echo "$server_names_line" | grep -o "\[\([^]]*\)\]" | sed -e "s/\[//" -e "s/\]//" | tr -d "'" | tr -d '"' | tr ',' ' ')
+    
+    # Дополнительная проверка, что мы получили корректный список серверов
+    if [ -z "$server_list" ]; then
+        # Попытка использовать альтернативный метод разбора
+        server_list=$(dnscrypt-proxy -list -config "$DNSCRYPT_CONFIG" 2>/dev/null | grep -E "^[^ ]+" | cut -d' ' -f1 | grep -v "^$")
+        
+        # Если по-прежнему нет серверов, выводим ошибку
+        if [ -z "$server_list" ]; then
+            log "ERROR" "${RED}Не удалось определить список настроенных серверов${NC}"
+            echo -e "${YELLOW}Проверьте корректность конфигурации DNSCrypt (server_names).${NC}"
+            return 1
+        fi
     fi
     
     echo -e "\n${YELLOW}Настроенные серверы:${NC} $server_list"
@@ -849,49 +866,74 @@ test_server_latency() {
     
     # Тестируем каждый сервер
     for server in $server_list; do
+        # Пропускаем пустые имена или явно некорректные значения
+        if [ -z "$server" ] || [[ "$server" == "#"* ]] || [ ${#server} -lt 3 ]; then
+            continue
+        fi
+        
         echo -n "Тестирование сервера $server... "
         
         # Получаем текущий IP сервера из логов dnscrypt-proxy
-        local server_ip=$(journalctl -u dnscrypt-proxy -n 100 | grep -i "$server" | grep -o -E "\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1 | tr -d '(' || echo "")
+        local server_ip=$(journalctl -u dnscrypt-proxy -n 200 | grep -i "$server" | grep -o -E "\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1 | tr -d '(' || echo "")
         
         if [ -z "$server_ip" ]; then
-            # Если не нашли в логах, пытаемся определить через DNSCrypt-proxy
-            echo -e "${YELLOW}IP не найден в логах${NC}"
-            local best_time="N/A"
-        else
-            # Выполняем несколько запросов для измерения времени отклика
+            # Если IP не найден в логах, получаем его через прямой запрос
+            server_ip="(IP не определен)"
+            
+            # Выполняем тестовые запросы
             local best_time=999999
-            for i in {1..5}; do
-                local time=$(dig @127.0.0.1 +time=2 +tries=1 example.com | grep "Query time" | awk '{print $4}')
+            for i in {1..3}; do
+                local time=$(dig @127.0.0.1 +timeout=2 +tries=1 example.com | grep "Query time" | awk '{print $4}')
                 
                 if [ -n "$time" ] && [ "$time" -lt "$best_time" ]; then
                     best_time=$time
                 fi
+                sleep 0.5
             done
             
             if [ "$best_time" -eq 999999 ]; then
                 best_time="таймаут"
+                echo -e "${RED}$best_time${NC}"
             else
                 best_time="${best_time}ms"
-            fi
-            
-            # Добавляем результат во временный файл для сортировки
-            if [[ "$best_time" != "таймаут" ]]; then
+                echo -e "${GREEN}$best_time${NC} $server_ip"
                 echo "$server $best_time $server_ip" >> "$tmp_file"
-            else
-                echo "$server $best_time" >> "$tmp_file"
             fi
+        else
+            # Если IP найден, проводим измерения
+            local best_time=999999
+            for i in {1..3}; do
+                local time=$(dig @127.0.0.1 +timeout=2 +tries=1 example.com | grep "Query time" | awk '{print $4}')
+                
+                if [ -n "$time" ] && [ "$time" -lt "$best_time" ]; then
+                    best_time=$time
+                fi
+                sleep 0.5
+            done
             
-            echo -e "${GREEN}$best_time${NC} ($server_ip)"
+            if [ "$best_time" -eq 999999 ]; then
+                best_time="таймаут"
+                echo -e "${RED}$best_time${NC}"
+            else
+                best_time="${best_time}ms"
+                echo -e "${GREEN}$best_time${NC} $server_ip"
+                echo "$server $best_time $server_ip" >> "$tmp_file"
+            fi
         fi
     done
     
-    # Сортируем и выводим результаты от самого быстрого к самому медленному
-    if [ -f "$tmp_file" ] && [ -s "$tmp_file" ]; then
-        echo -e "\n${BLUE}Результаты тестирования (отсортированы по времени отклика):${NC}"
-        sort -k2 -n "$tmp_file" | awk '{printf "%-30s %-15s", $1, $2; for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | \
-            awk 'BEGIN {print "Сервер                         Время отклика    IP адрес"; print "----------------------------------------------------------------------"}; {print $0}'
+    # Проверяем, есть ли результаты
+    if [ ! -s "$tmp_file" ]; then
+        echo -e "\n${RED}Не удалось получить результаты тестирования для серверов.${NC}"
+        echo -e "${YELLOW}Возможно, серверы недоступны или некорректно настроены.${NC}"
+        rm -f "$tmp_file"
+        return 1
     fi
+    
+    # Сортируем и выводим результаты от самого быстрого к самому медленному
+    echo -e "\n${BLUE}Результаты тестирования (отсортированы по времени отклика):${NC}"
+    sort -k2 -n "$tmp_file" | sed 's/ms//g' | awk '{printf "%-30s %-15s", $1, $2"ms"; for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | \
+        awk 'BEGIN {print "Сервер                         Время отклика    IP адрес"; print "----------------------------------------------------------------------"}; {print $0}'
     
     # Удаляем временный файл
     rm -f "$tmp_file"
@@ -942,19 +984,77 @@ configure_fastest_servers() {
     esac
     
     if [ "$num_servers" -gt 0 ]; then
-        # Получаем список серверов, отсортированных по скорости
-        local sorted_servers=$(journalctl -u dnscrypt-proxy -n 1000 | grep "Server with lowest initial latency" | tail -1 | sed 's/.*: //' | tr -d '[]' | tr ',' ' ')
+        # Создаем временный файл для сбора данных о серверах
+        local tmp_file=$(mktemp)
         
-        if [ -z "$sorted_servers" ]; then
-            log "ERROR" "${RED}Не удалось получить список отсортированных серверов${NC}"
-            echo -e "${YELLOW}Выполните перезапуск DNSCrypt-proxy и повторите попытку позже.${NC}"
-            return 1
+        # Получаем список настроенных серверов (корректный парсинг)
+        local server_names_line=$(grep "server_names" "$DNSCRYPT_CONFIG" | head -1)
+        local server_list=$(echo "$server_names_line" | grep -o "\[\([^]]*\)\]" | sed -e "s/\[//" -e "s/\]//" | tr -d "'" | tr -d '"' | tr ',' ' ')
+        
+        # Если не удалось получить список, пробуем альтернативный метод
+        if [ -z "$server_list" ]; then
+            server_list=$(dnscrypt-proxy -list -config "$DNSCRYPT_CONFIG" 2>/dev/null | grep -E "^[^ ]+" | cut -d' ' -f1 | grep -v "^$")
+        fi
+        
+        # Если все еще нет данных, используем журналы
+        if [ -z "$server_list" ]; then
+            local sorted_servers=$(journalctl -u dnscrypt-proxy -n 1000 | grep "Server with lowest initial latency" | tail -1 | sed 's/.*: //' | tr -d '[]' | tr ',' ' ')
+            
+            if [ -z "$sorted_servers" ]; then
+                log "ERROR" "${RED}Не удалось получить список серверов${NC}"
+                echo -e "${YELLOW}Выполните перезапуск DNSCrypt-proxy и повторите попытку позже.${NC}"
+                rm -f "$tmp_file"
+                return 1
+            fi
+            
+            # Используем предварительно отсортированный список из журналов
+            server_list=$sorted_servers
+        else
+            # Тестируем каждый сервер для определения самых быстрых
+            echo -e "\n${BLUE}Определение самых быстрых серверов...${NC}"
+            
+            for server in $server_list; do
+                # Пропускаем некорректные значения
+                if [ -z "$server" ] || [[ "$server" == "#"* ]] || [ ${#server} -lt 3 ]; then
+                    continue
+                fi
+                
+                echo -n "Тестирование $server... "
+                
+                # Выполняем тестовые запросы
+                local best_time=999999
+                for i in {1..3}; do
+                    local time=$(dig @127.0.0.1 +timeout=2 +tries=1 example.com | grep "Query time" | awk '{print $4}')
+                    
+                    if [ -n "$time" ] && [ "$time" -lt "$best_time" ]; then
+                        best_time=$time
+                    fi
+                    sleep 0.5
+                done
+                
+                if [ "$best_time" -eq 999999 ]; then
+                    echo -e "${RED}таймаут${NC}"
+                else
+                    echo -e "${GREEN}${best_time}ms${NC}"
+                    echo "$server $best_time" >> "$tmp_file"
+                fi
+            done
+            
+            # Сортируем серверы по времени отклика
+            if [ -s "$tmp_file" ]; then
+                server_list=$(sort -k2 -n "$tmp_file" | cut -d' ' -f1)
+            else
+                log "ERROR" "${RED}Не удалось получить результаты тестирования${NC}"
+                rm -f "$tmp_file"
+                return 1
+            fi
         fi
         
         # Выбираем первые N серверов
         local fastest_servers=()
         local count=0
-        for server in $sorted_servers; do
+        
+        for server in $server_list; do
             fastest_servers+=("$server")
             ((count++))
             
@@ -962,6 +1062,13 @@ configure_fastest_servers() {
                 break
             fi
         done
+        
+        # Проверяем, что у нас есть серверы для добавления
+        if [ ${#fastest_servers[@]} -eq 0 ]; then
+            log "ERROR" "${RED}Не удалось определить быстрые серверы${NC}"
+            rm -f "$tmp_file"
+            return 1
+        fi
         
         # Формируем строку серверов для конфигурации
         local server_names="["
@@ -993,9 +1100,14 @@ configure_fastest_servers() {
         fi
         
         log "SUCCESS" "${GREEN}Настроено использование $num_servers самых быстрых серверов со стратегией $lb_strategy${NC}"
+        echo -e "Выбранные серверы: ${YELLOW}${fastest_servers[*]}${NC}"
+        
+        # Удаляем временный файл
+        rm -f "$tmp_file"
         
         # Перезапуск службы
         systemctl restart dnscrypt-proxy
+        echo -e "\n${GREEN}DNSCrypt-proxy перезапущен с новой конфигурацией${NC}"
     fi
     
     return 0
