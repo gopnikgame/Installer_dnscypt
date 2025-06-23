@@ -266,7 +266,158 @@ EOF
     fi
 }
 
-# Добавляем новый пункт в функцию main для вызова функции исправления
+# Функция для определения протокола DNS
+get_dns_protocol_info() {
+    log "INFO" "=== Определение используемого DNS протокола ==="
+    
+    # Проверка конфигурации DNSCrypt
+    local protocol_info=""
+    local used_protocols=()
+    
+    echo -e "${YELLOW}Анализ протоколов из конфигурации:${NC}"
+    
+    # Проверяем, включены ли различные протоколы в конфигурации
+    if grep -q "^[^#]*dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
+        used_protocols+=("DNSCrypt")
+        echo -e "  ${GREEN}✓${NC} DNSCrypt протокол ${GREEN}включен${NC}"
+    else
+        echo -e "  ${RED}✗${NC} DNSCrypt протокол ${RED}отключен${NC}"
+    fi
+    
+    if grep -q "^[^#]*doh_servers = true" "$DNSCRYPT_CONFIG"; then
+        used_protocols+=("DoH")
+        echo -e "  ${GREEN}✓${NC} DNS-over-HTTPS (DoH) ${GREEN}включен${NC}"
+    else
+        echo -e "  ${RED}✗${NC} DNS-over-HTTPS (DoH) ${RED}отключен${NC}"
+    fi
+    
+    if grep -q "^[^#]*odoh_servers = true" "$DNSCRYPT_CONFIG"; then
+        used_protocols+=("ODoH")
+        echo -e "  ${GREEN}✓${NC} Oblivious DoH (ODoH) ${GREEN}включен${NC}"
+    else
+        echo -e "  ${RED}✗${NC} Oblivious DoH (ODoH) ${RED}отключен${NC}"
+    fi
+    
+    if grep -q "^[^#]*dot_servers = true" "$DNSCRYPT_CONFIG"; then
+        used_protocols+=("DoT")
+        echo -e "  ${GREEN}✓${NC} DNS-over-TLS (DoT) ${GREEN}включен${NC}"
+    else
+        echo -e "  ${RED}✗${NC} DNS-over-TLS (DoT) ${RED}отключен${NC}"
+    fi
+    
+    # HTTP/3 (QUIC) поддержка для DoH
+    if grep -q "^[^#]*http3 = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "  ${GREEN}✓${NC} HTTP/3 (QUIC) для DoH ${GREEN}включен${NC}"
+    else
+        echo -e "  ${RED}✗${NC} HTTP/3 (QUIC) для DoH ${RED}отключен${NC}"
+    fi
+    
+    # Проверка анонимизации
+    echo -e "\n${YELLOW}Анализ настроек анонимизации:${NC}"
+    if grep -q "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" && grep -q "routes.*=.*\[" "$DNSCRYPT_CONFIG"; then
+        used_protocols+=("Anonymized")
+        echo -e "  ${GREEN}✓${NC} Anonymized DNSCrypt ${GREEN}включен${NC}"
+        
+        # Подсчет маршрутов анонимизации
+        local route_count=$(grep -A 50 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep -E "\[.*\].*\[.*\]" | wc -l)
+        echo -e "  ${BLUE}ℹ${NC} Настроено маршрутов анонимизации: ${route_count}"
+    else
+        echo -e "  ${RED}✗${NC} Anonymized DNSCrypt ${RED}отключен${NC}"
+    fi
+    
+    # Анализ логов для определения активного сервера и протокола
+    echo -e "\n${YELLOW}Анализ активных соединений по логам:${NC}"
+    local dns_log=$(journalctl -u dnscrypt-proxy -n 100 --no-pager 2>/dev/null)
+    
+    # Поиск информации о протоколе
+    local protocol_line=$(echo "$dns_log" | grep -E "Connected to ([^(]*).*\(([^)]*)\)" | tail -n 1)
+    
+    if [ -n "$protocol_line" ]; then
+        local server_name=$(echo "$protocol_line" | sed -E 's/.*Connected to ([^(]*).*/\1/' | xargs)
+        local server_proto=$(echo "$protocol_line" | sed -E 's/.*\(([^)]*)\).*/\1/' | xargs)
+        
+        echo -e "  ${GREEN}Активное соединение:${NC} $server_name"
+        echo -e "  ${GREEN}Используемый протокол:${NC} $server_proto"
+    else
+        # Альтернативный способ определения
+        local stamp_line=$(echo "$dns_log" | grep -E "Server stamp:" | tail -n 1)
+        
+        if [ -n "$stamp_line" ]; then
+            if echo "$stamp_line" | grep -q "sdns://A"; then
+                echo -e "  ${GREEN}Используемый протокол:${NC} DNSCrypt"
+            elif echo "$stamp_line" | grep -q "sdns://h"; then
+                echo -e "  ${GREEN}Используемый протокол:${NC} DNS-over-HTTPS (DoH)"
+            elif echo "$stamp_line" | grep -q "sdns://i"; then
+                echo -e "  ${GREEN}Используемый протокол:${NC} DNS-over-TLS (DoT)"
+            elif echo "$stamp_line" | grep -q "sdns://o"; then
+                echo -e "  ${GREEN}Используемый протокол:${NC} Oblivious DoH (ODoH)"
+            else
+                echo -e "  ${YELLOW}Не удалось определить протокол из штампа сервера${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}Не удалось определить используемый протокол из логов${NC}"
+        fi
+    fi
+    
+    # Проверка TCP/UDP
+    echo -e "\n${YELLOW}Анализ транспортного протокола:${NC}"
+    local force_tcp=$(grep "^[^#]*force_tcp" "$DNSCRYPT_CONFIG" | head -1 | grep -o "= ..*" | cut -d' ' -f2)
+    
+    if [ "$force_tcp" = "true" ]; then
+        echo -e "  ${BLUE}ℹ${NC} Принудительное использование TCP ${GREEN}включено${NC}"
+    else
+        # Проверяем использование TCP/UDP по логам
+        local udp_count=$(echo "$dns_log" | grep -i "udp" | grep -v "Failed\|Error" | wc -l)
+        local tcp_count=$(echo "$dns_log" | grep -i "tcp" | grep -v "Failed\|Error" | wc -l)
+        
+        if [ "$udp_count" -gt 0 ] && [ "$tcp_count" -gt 0 ]; then
+            echo -e "  ${BLUE}ℹ${NC} Используются оба транспорта: TCP и UDP"
+            echo -e "  ${BLUE}ℹ${NC} UDP соединений: $udp_count, TCP соединений: $tcp_count"
+        elif [ "$udp_count" -gt 0 ]; then
+            echo -e "  ${BLUE}ℹ${NC} Преимущественно используется UDP"
+        elif [ "$tcp_count" -gt 0 ]; then
+            echo -e "  ${BLUE}ℹ${NC} Преимущественно используется TCP"
+        else
+            echo -e "  ${YELLOW}Не удалось определить транспортный протокол${NC}"
+        fi
+    fi
+    
+    # Сводная информация
+    echo -e "\n${BLUE}Сводная информация о конфигурации DNS:${NC}"
+    
+    if [ ${#used_protocols[@]} -gt 0 ]; then
+        echo -e "  ${GREEN}Включенные протоколы:${NC} ${used_protocols[*]}"
+    else
+        echo -e "  ${RED}Не найдены включенные DNS протоколы${NC}"
+    fi
+    
+    # Проверка шифрования с помощью dig
+    echo -e "\n${YELLOW}Проверка шифрования DNS запросов:${NC}"
+    local dns_works=0
+    
+    if dig +short @127.0.0.1 cloudflare.com > /dev/null 2>&1; then
+        dns_works=1
+        # Проверка DNSSec
+        local dnssec_enabled=$(grep "^[^#]*require_dnssec = true" "$DNSCRYPT_CONFIG" | wc -l)
+        
+        if [ "$dnssec_enabled" -gt 0 ]; then
+            echo -e "  ${GREEN}✓${NC} DNSSEC ${GREEN}включен${NC} для проверки подписей DNS"
+        else
+            echo -e "  ${YELLOW}⚠${NC} DNSSEC ${YELLOW}отключен${NC} (рекомендуется включить)"
+        fi
+        
+        # Проверка шифрования
+        if [ ${#used_protocols[@]} -gt 0 ]; then
+            echo -e "  ${GREEN}✓${NC} DNS-запросы ${GREEN}шифруются${NC} (${used_protocols[*]})"
+        else
+            echo -e "  ${RED}✗${NC} DNS-запросы ${RED}не шифруются${NC} или протокол не определен"
+        fi
+    else
+        echo -e "  ${RED}✗${NC} Не удалось выполнить тестовый DNS-запрос"
+    fi
+}
+
+# Главная функция
 main() {
     # Запуск проверки DNS
     check_current_dns
@@ -305,6 +456,14 @@ main() {
         fi
     else
         echo -e "\n${GREEN}DNS-резолвинг работает через DNSCrypt корректно.${NC}"
+        
+        # Показываем информацию о протоколе DNS
+        echo -e "${YELLOW}Показать подробную информацию о протоколах DNS? (y/n)${NC}"
+        read -p "> " show_protocol
+        
+        if [[ "${show_protocol,,}" == "y" ]]; then
+            get_dns_protocol_info
+        fi
     fi
 }
 
