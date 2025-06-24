@@ -1,173 +1,11 @@
 #!/bin/bash
 # modules/change_dns.sh
 
+# Подключаем общую библиотеку
+source "$(dirname "$0")/../lib/common.sh"
+
 # Константы
-DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
-BACKUP_DIR="/var/backup/dnscrypt"
 TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
-
-# Цветовые коды
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[0;34m"
-NC="\033[0m"
-
-# Функция логирования
-log() {
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo -e "${timestamp} [$1] $2"
-}
-
-# Функция для проверки текущих настроек
-check_current_settings() {
-    log "INFO" "=== Текущие настройки DNSCrypt ==="
-    
-    if [ ! -f "$DNSCRYPT_CONFIG" ]; then
-        log "ERROR" "Файл конфигурации не найден!"
-        return 1
-    fi
-
-    echo -e "\n${BLUE}Текущие DNS серверы:${NC}"
-    grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = //'
-
-    echo -e "\n${BLUE}Протоколы и безопасность:${NC}"
-    echo -n "DNSSEC: "
-    if grep -q "require_dnssec = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -n "NoLog: "
-    if grep -q "require_nolog = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -n "NoFilter: "
-    if grep -q "require_nofilter = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -e "\n${BLUE}Прослушиваемые адреса:${NC}"
-    grep "listen_addresses" "$DNSCRYPT_CONFIG" | sed 's/listen_addresses = //'
-
-    echo -e "\n${BLUE}Поддерживаемые протоколы:${NC}"
-    echo -n "DNSCrypt: "
-    if grep -q "dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -n "DNS-over-HTTPS (DoH): "
-    if grep -q "doh_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -n "HTTP/3 (QUIC): "
-    if grep -q "http3 = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -n "Oblivious DoH (ODoH): "
-    if grep -q "odoh_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
-    else
-        echo -e "${RED}Выключен${NC}"
-    fi
-
-    echo -e "\n${BLUE}Настройки кэша:${NC}"
-    echo -n "Кэширование: "
-    if grep -q "cache = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включено${NC}"
-        echo "Размер кэша: $(grep "cache_size" "$DNSCRYPT_CONFIG" | sed 's/cache_size = //')"
-        echo "Минимальное TTL: $(grep "cache_min_ttl" "$DNSCRYPT_CONFIG" | sed 's/cache_min_ttl = //')"
-        echo "Максимальное TTL: $(grep "cache_max_ttl" "$DNSCRYPT_CONFIG" | sed 's/cache_max_ttl = //')"
-    else
-        echo -e "${RED}Выключено${NC}"
-    fi
-    
-    echo -e "\n${BLUE}Дополнительные настройки:${NC}"
-    echo -n "Блокировка IPv6: "
-    if grep -q "block_ipv6 = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включена${NC}"
-    else
-        echo -e "${RED}Выключена${NC}"
-    fi
-
-    echo -n "Горячая перезагрузка конфигурации: "
-    if grep -q "enable_hot_reload = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включена${NC}"
-    else
-        echo -e "${RED}Выключена${NC}"
-    fi
-}
-
-# Функция для проверки применения настроек
-verify_settings() {
-    local server_name="$1"
-    log "INFO" "Проверка применения настроек..."
-    
-    # Проверка статуса службы
-    if ! systemctl is-active --quiet dnscrypt-proxy; then
-        log "ERROR" "Служба DNSCrypt не запущена"
-        return 1
-    fi
-
-    # Проверка логов на наличие ошибок
-    if journalctl -u dnscrypt-proxy -n 50 | grep -i error > /dev/null; then
-        log "WARN" "В логах обнаружены ошибки:"
-        journalctl -u dnscrypt-proxy -n 50 | grep -i error
-    fi
-
-    # Проверка резолвинга
-    echo -e "\n${BLUE}Проверка DNS резолвинга:${NC}"
-    local test_domains=("google.com" "cloudflare.com" "github.com")
-    local success=true
-
-    for domain in "${test_domains[@]}"; do
-        echo -n "Тест $domain: "
-        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
-            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
-            echo -e "${GREEN}OK${NC} (${resolve_time}ms)"
-        else
-            echo -e "${RED}ОШИБКА${NC}"
-            success=false
-        fi
-    done
-
-    # Проверка используемого сервера
-    echo -e "\n${BLUE}Проверка активного DNS сервера:${NC}"
-    local current_server=$(dig +short resolver.dnscrypt.info TXT | grep -o '".*"' | tr -d '"')
-    if [ -n "$current_server" ]; then
-        echo "Активный сервер: $current_server"
-    else
-        echo -e "${RED}Не удалось определить активный сервер${NC}"
-        success=false
-    fi
-
-    if [ "$success" = true ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Функция для создания резервной копии
-backup_config() {
-    mkdir -p "$BACKUP_DIR"
-    cp "$DNSCRYPT_CONFIG" "${BACKUP_DIR}/dnscrypt-proxy_${TIMESTAMP}.toml"
-    log "INFO" "Создана резервная копия конфигурации"
-}
 
 # Функция для применения новых настроек
 apply_settings() {
@@ -185,7 +23,8 @@ apply_settings() {
     local cache="${12}"
     local hot_reload="${13}"
 
-    backup_config
+    # Используем функцию backup_config из common.sh вместо локальной
+    backup_config "$DNSCRYPT_CONFIG" "dnscrypt-proxy"
 
     # Обновление настроек в конфигурационном файле
     sed -i "s/server_names = .*/server_names = $server_name/" "$DNSCRYPT_CONFIG"
@@ -232,8 +71,8 @@ apply_settings() {
 
     log "INFO" "Настройки обновлены"
     
-    # Перезапуск службы
-    systemctl restart dnscrypt-proxy
+    # Используем функцию restart_service из common.sh
+    restart_service "dnscrypt-proxy"
     sleep 2
 
     verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
@@ -308,8 +147,8 @@ configure_http3() {
             ;;
     esac
     
-    # Перезагрузка службы
-    systemctl restart dnscrypt-proxy
+    # Используем функцию restart_service из common.sh
+    restart_service "dnscrypt-proxy"
     
     return 0
 }
@@ -452,8 +291,8 @@ configure_cache() {
             ;;
     esac
     
-    # Перезагрузка службы
-    systemctl restart dnscrypt-proxy
+    # Используем функцию restart_service из common.sh
+    restart_service "dnscrypt-proxy"
     
     return 0
 }
@@ -500,8 +339,8 @@ advanced_settings() {
                     log "SUCCESS" "${GREEN}Блокировка IPv6 отключена${NC}"
                 fi
                 
-                # Перезагрузка службы
-                systemctl restart dnscrypt-proxy
+                # Используем функцию restart_service из common.sh
+                restart_service "dnscrypt-proxy"
                 ;;
             4)
                 configure_sources
@@ -528,8 +367,8 @@ advanced_settings() {
                     log "SUCCESS" "${GREEN}Горячая перезагрузка отключена${NC}"
                 fi
                 
-                # Перезагрузка службы
-                systemctl restart dnscrypt-proxy
+                # Используем функцию restart_service из common.sh
+                restart_service "dnscrypt-proxy"
                 ;;
             0)
                 return 0
@@ -628,8 +467,8 @@ EOL
             
             log "SUCCESS" "${GREEN}Источник '$source_name' добавлен${NC}"
             
-            # Перезагрузка службы
-            systemctl restart dnscrypt-proxy
+            # Используем функцию restart_service из common.sh
+            restart_service "dnscrypt-proxy"
             ;;
         2)
             echo -e "\n${BLUE}Удаление источника:${NC}"
@@ -671,8 +510,8 @@ EOL
                 
                 log "SUCCESS" "${GREEN}Источник '$selected_source' удален${NC}"
                 
-                # Перезагрузка службы
-                systemctl restart dnscrypt-proxy
+                # Используем функцию restart_service из common.sh
+                restart_service "dnscrypt-proxy"
             else
                 log "ERROR" "${RED}Неверный выбор${NC}"
                 return 1
@@ -853,13 +692,11 @@ configure_geo_servers() {
             sed -i "/lb_strategy = /a timeout = 2500" "$DNSCRYPT_CONFIG"
         fi
         
-        # Настраиваем проверку доступности серверов
-        configure_server_availability
         
         log "INFO" "DNS серверы изменены на $server_name"
         
-        # Перезапуск службы
-        systemctl restart dnscrypt-proxy
+        # Используем функцию restart_service из common.sh
+        restart_service "dnscrypt-proxy"
         sleep 2
         
         verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
@@ -868,152 +705,13 @@ configure_geo_servers() {
     return 0
 }
 
-# Функция для настройки доступности серверов
-configure_server_availability() {
-    log "INFO" "Настройка проверки доступности серверов..."
-    
-    # Проверка и настройка bootstrap_resolvers
-    if grep -q "bootstrap_resolvers = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/bootstrap_resolvers = .*/bootstrap_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']/" "$DNSCRYPT_CONFIG"
-    else
-        sed -i "/\[sources\]/i bootstrap_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']" "$DNSCRYPT_CONFIG"
-    fi
-    
-    # Игнорирование системных DNS
-    if grep -q "ignore_system_dns = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/ignore_system_dns = .*/ignore_system_dns = true/" "$DNSCRYPT_CONFIG"
-    else
-        sed -i "/bootstrap_resolvers = /a ignore_system_dns = true" "$DNSCRYPT_CONFIG"
-    fi
-    
-    # Настройка netprobe_timeout
-    if grep -q "netprobe_timeout = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/netprobe_timeout = .*/netprobe_timeout = 10/" "$DNSCRYPT_CONFIG"
-    else
-        sed -i "/ignore_system_dns = /a netprobe_timeout = 10" "$DNSCRYPT_CONFIG"
-    fi
-    
-    # Настройка netprobe_address
-    if grep -q "netprobe_address = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/netprobe_address = .*/netprobe_address = '1.1.1.1:53'/" "$DNSCRYPT_CONFIG"
-    else
-        sed -i "/netprobe_timeout = /a netprobe_address = '1.1.1.1:53'" "$DNSCRYPT_CONFIG"
-    fi
-    
-    # Настройка fallback_resolvers
-    if grep -q "fallback_resolvers = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/fallback_resolvers = .*/fallback_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']/" "$DNSCRYPT_CONFIG"
-    else
-        sed -i "/netprobe_address = /a fallback_resolvers = ['1.1.1.1:53', '8.8.8.8:53', '9.9.9.9:53']" "$DNSCRYPT_CONFIG"
-    fi
-    
-    # Настройка blocked_query_response
-    if grep -q "blocked_query_response = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/blocked_query_response = .*/blocked_query_response = 'refused'/" "$DNSCRYPT_CONFIG"
-    else
-        sed -i "/fallback_resolvers = /a blocked_query_response = 'refused'" "$DNSCRYPT_CONFIG"
-    fi
-    
-    # Настройка параметров определения недоступных серверов
-    local availability_settings=(
-        "max_server_connections = 10"
-        "max_failures = 3"
-        "max_silent_failures = 5"
-        "refresh_delay = 30"
-        "log_files_max_size = 10"
-        "log_files_max_age = 7"
-        "log_files_max_backups = 2"
-        "use_servers_names = true"
-    )
-    
-    # Вставляем настройки
-    local last_param="blocked_query_response = 'refused'"
-    for setting in "${availability_settings[@]}"; do
-        param_name=$(echo "$setting" | cut -d' ' -f1)
-        
-        if grep -q "$param_name = " "$DNSCRYPT_CONFIG"; then
-            sed -i "s/$param_name = .*/$setting/" "$DNSCRYPT_CONFIG"
-        else
-            sed -i "/$last_param/a $setting" "$DNSCRYPT_CONFIG"
-            last_param="$setting"
-        fi
-    done
-    
-    # Добавление служебных настроек
-    local service_settings=(
-        "tls_cipher_suites = []"
-        "handle_dot_within_domain = true"
-        "enable_hot_reload = true"
-    )
-    
-    local last_param="use_servers_names = true"
-    for setting in "${service_settings[@]}"; do
-        param_name=$(echo "$setting" | cut -d' ' -f1)
-        
-        if grep -q "$param_name = " "$DNSCRYPT_CONFIG"; then
-            sed -i "s/$param_name = .*/$setting/" "$DNSCRYPT_CONFIG"
-        else
-            sed -i "/$last_param/a $setting" "$DNSCRYPT_CONFIG"
-            last_param="$setting"
-        fi
-    done
-    
-    log "SUCCESS" "${GREEN}Настройки доступности серверов обновлены${NC}"
-}
-
-# Функция для расширенной проверки конфигурации
-extended_verify_config() {
-    echo -e "\n${BLUE}Расширенная проверка конфигурации DNSCrypt:${NC}"
-    
-    # Проверка конфигурации
-    if cd "$(dirname "$DNSCRYPT_CONFIG")" && dnscrypt-proxy -check; then
-        log "SUCCESS" "${GREEN}Конфигурация успешно проверена${NC}"
-        
-        # Проверка активных DNS-серверов
-        echo -e "\n${YELLOW}==== DNSCrypt активные соединения ====${NC}"
-        journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Connected to|Server with lowest" | tail -10
-
-        echo -e "\n${YELLOW}==== Текущий DNS сервер ====${NC}"
-        dig +short resolver.dnscrypt.info TXT | tr -d '"'
-
-        echo -e "\n${YELLOW}==== Тестирование доступности серверов ====${NC}"
-        for domain in google.com cloudflare.com facebook.com example.com; do
-            echo -n "Запрос $domain: "
-            time=$(dig @127.0.0.1 +noall +stats "$domain" | grep "Query time" | awk '{print $4}')
-            if [ -n "$time" ]; then
-                echo -e "${GREEN}OK ($time ms)${NC}"
-            else
-                echo -e "${RED}ОШИБКА${NC}"
-            fi
-        done
-
-        echo -e "\n${YELLOW}==== Проверка DNSSEC ====${NC}"
-        dig @127.0.0.1 dnssec-tools.org +dnssec +short
-        
-        # Проверка используемого протокола
-        echo -e "\n${YELLOW}==== Информация о протоколе ====${NC}"
-        local protocol_info=$(journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Using protocol|Using transport" | tail -1)
-        if [ -n "$protocol_info" ]; then
-            echo -e "${GREEN}$protocol_info${NC}"
-        else
-            echo -e "${YELLOW}Информация о протоколе не найдена${NC}"
-        fi
-        
-        # Проверка индикатора загрузки
-        local load_info=$(systemctl status dnscrypt-proxy | grep "Memory\|CPU")
-        if [ -n "$load_info" ]; then
-            echo -e "\n${YELLOW}==== Ресурсы системы ====${NC}"
-            echo "$load_info"
-        fi
-        
-    else
-        log "ERROR" "${RED}Ошибка в конфигурации${NC}"
-    fi
-}
-
 # Основная функция изменения DNS
 change_dns() {
-    log "INFO" "=== Настройка DNSCrypt ==="
+    # Используем print_header из common.sh для отображения заголовка
+    print_header "НАСТРОЙКА DNSCRYPT"
+    
+    # Проверка root-прав
+    check_root
     
     # Проверка существования конфигурационного файла
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
@@ -1103,8 +801,8 @@ change_dns() {
                     sed -i "s/server_names = .*/server_names = $server_name/" "$DNSCRYPT_CONFIG"
                     log "INFO" "DNS сервер изменен на $server_name"
                     
-                    # Перезапуск службы
-                    systemctl restart dnscrypt-proxy
+                    # Используем функцию restart_service из common.sh
+                    restart_service "dnscrypt-proxy"
                     sleep 2
                     
                     verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
@@ -1133,8 +831,8 @@ change_dns() {
                 
                 log "INFO" "Настройки безопасности обновлены"
                 
-                # Перезапуск службы
-                systemctl restart dnscrypt-proxy
+                # Используем функцию restart_service из common.sh
+                restart_service "dnscrypt-proxy"
                 sleep 2
                 ;;
                 
@@ -1170,8 +868,8 @@ change_dns() {
                 
                 log "INFO" "Настройки протоколов обновлены"
                 
-                # Перезапуск службы
-                systemctl restart dnscrypt-proxy
+                # Используем функцию restart_service из common.sh
+                restart_service "dnscrypt-proxy"
                 sleep 2
                 ;;
                 
@@ -1198,5 +896,8 @@ change_dns() {
     done
 }
 
-# Запуск скрипта
-change_dns
+# Проверяем, запущен ли скрипт напрямую или как модуль
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Запускаем основную функцию, если скрипт запущен напрямую
+    change_dns
+fi
