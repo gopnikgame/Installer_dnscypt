@@ -1,22 +1,13 @@
 #!/bin/bash
 
+# Подгрузка общих функций
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+
 # Константы
 DNSCRYPT_BINARY="/usr/local/bin/dnscrypt-proxy"
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
 SERVICE_NAME="dnscrypt-proxy.service"
-
-# Цветовые коды
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[0;34m"
-NC="\033[0m"
-
-# Функция логирования
-log() {
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo -e "${timestamp} [$1] $2"
-}
 
 # Основная функция проверки
 verify_installation() {
@@ -51,10 +42,10 @@ verify_installation() {
     fi
 
     # Проверка службы
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        log "SUCCESS" "Служба DNSCrypt активна"
+    if check_service_status "$SERVICE_NAME"; then
+        # Функция уже выводит сообщение об успехе
+        :
     else
-        log "ERROR" "Служба DNSCrypt не активна"
         log "INFO" "Для управления службой используйте пункт 6 главного меню"
         ((errors++))
     fi
@@ -71,7 +62,7 @@ verify_installation() {
     if dig @127.0.0.1 google.com +short +timeout=5 >/dev/null 2>&1; then
         log "SUCCESS" "DNS резолвинг работает"
         
-        echo -e "\n${BLUE}Информация о DNS резолвинге:${NC}"
+        print_header "Информация о DNS резолвинге"
         echo "Текущий DNS сервер:"
         dig +short resolver.dnscrypt.info TXT | sed 's/"//g'
         
