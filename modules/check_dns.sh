@@ -1,24 +1,13 @@
 #!/bin/bash
 # modules/check_dns.sh
 
+# Подгрузка общих функций
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+
 # Константы
-DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
 RESOLV_CONF="/etc/resolv.conf"
 RESOLVED_CONF="/etc/systemd/resolved.conf.d/dnscrypt.conf"
-
-# Цветовые коды
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-BLUE="\033[0;34m"
-NC="\033[0m"
-
-# Функция логирования
-log() {
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo -e "${timestamp} [$1] $2"
-}
-
 
 # Функция проверки текущего DNS сервера
 check_current_dns() {
@@ -140,7 +129,7 @@ fix_all_dns_issues() {
                 # Добавляем новую строку server_names
                 sed -i "${line_num}i server_names = [${disabled_servers}]" "$DNSCRYPT_CONFIG"
                 
-                log "SUCCESS" "${GREEN}Активированы ранее отключенные серверы: ${disabled_servers}${NC}"
+                log "SUCCESS" "Активированы ранее отключенные серверы: ${disabled_servers}"
             fi
         # Если нет активных server_names, но есть закомментированные
         elif [ -z "$server_lines" ] && [ -n "$commented_lines" ]; then
@@ -158,26 +147,25 @@ fix_all_dns_issues() {
                 # Добавляем раскомментированную строку
                 sed -i "${line_num}i server_names = [${servers_list}]" "$DNSCRYPT_CONFIG"
                 
-                log "SUCCESS" "${GREEN}Активированы ранее закомментированные серверы: ${servers_list}${NC}"
+                log "SUCCESS" "Активированы ранее закомментированные серверы: ${servers_list}"
             fi
         # Если нет ни активных, ни отключенных, ни закомментированных server_names
         elif [ -z "$server_lines" ] && [ -z "$disabled_lines" ] && [ -z "$commented_lines" ]; then
             # Добавляем настройки по умолчанию
             sed -i "/\[sources\]/i server_names = ['cloudflare']" "$DNSCRYPT_CONFIG"
-            log "SUCCESS" "${GREEN}Добавлен сервер Cloudflare по умолчанию${NC}"
+            log "SUCCESS" "Добавлен сервер Cloudflare по умолчанию"
         fi
         
         # Перезапускаем службу DNSCrypt
         log "INFO" "Перезапуск DNSCrypt-proxy..."
-        systemctl restart dnscrypt-proxy || {
-            log "ERROR" "${RED}Не удалось перезапустить DNSCrypt-proxy${NC}"
+        if ! restart_service "dnscrypt-proxy"; then
             return 1
-        }
+        fi
         
         # Даем время на запуск службы
         sleep 2
     else
-        log "ERROR" "${RED}Не найден файл конфигурации DNSCrypt${NC}"
+        log "ERROR" "Не найден файл конфигурации DNSCrypt"
         return 1
     fi
     
@@ -194,9 +182,9 @@ DNSStubListener=no
 EOF
         
         # Перезапускаем systemd-resolved
-        systemctl restart systemd-resolved || {
-            log "WARN" "${YELLOW}Не удалось перезапустить systemd-resolved${NC}"
-        }
+        if ! restart_service "systemd-resolved"; then
+            log "WARN" "Не удалось перезапустить systemd-resolved"
+        fi
     fi
     
     # 3. Настраиваем resolv.conf
@@ -207,10 +195,9 @@ EOF
         log "INFO" "Снят атрибут immutable с resolv.conf"
     fi
     
-    # Сохраняем бэкап, если еще нет
-    if [ ! -f "${RESOLV_CONF}.backup" ]; then
-        cp "$RESOLV_CONF" "${RESOLV_CONF}.backup"
-        log "INFO" "Создан бэкап resolv.conf"
+    # Создаем резервную копию с помощью функции из common.sh
+    if [ -f "$RESOLV_CONF" ]; then
+        backup_config "$RESOLV_CONF" "resolv.conf"
     fi
     
     # Записываем новый resolv.conf
@@ -227,7 +214,7 @@ EOF
     log "INFO" "Проверка работы DNSCrypt..."
     if dig @127.0.0.1 cloudflare.com +short +timeout=5 > /dev/null 2>&1; then
         local serve_time=$(dig @127.0.0.1 cloudflare.com +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
-        log "SUCCESS" "${GREEN}DNSCrypt работает корректно! Время ответа: ${serve_time}ms${NC}"
+        log "SUCCESS" "DNSCrypt работает корректно! Время ответа: ${serve_time}ms"
         
         # Проверяем используемый сервер
         echo -e "${YELLOW}Проверка используемого DNS-сервера:${NC}"
@@ -246,11 +233,10 @@ EOF
         
         return 0
     else
-        log "ERROR" "${RED}DNSCrypt не работает корректно!${NC}"
+        log "ERROR" "DNSCrypt не работает корректно!"
         
         # Проверяем, запущена ли служба
-        if ! systemctl is-active --quiet dnscrypt-proxy; then
-            log "ERROR" "${RED}Служба DNSCrypt-proxy не запущена!${NC}"
+        if ! check_service_status "dnscrypt-proxy"; then
             systemctl start dnscrypt-proxy
         fi
         
@@ -419,6 +405,12 @@ get_dns_protocol_info() {
 
 # Главная функция
 main() {
+    # Проверка подключения к интернету
+    if ! check_internet; then
+        log "ERROR" "Отсутствует подключение к интернету. Проверьте соединение и попробуйте снова."
+        return 1
+    fi
+
     # Запуск проверки DNS
     check_current_dns
     
@@ -433,7 +425,7 @@ main() {
     fi
     
     # Проверка работы DNSCrypt
-    if ! systemctl is-active --quiet dnscrypt-proxy; then
+    if ! check_service_status "dnscrypt-proxy"; then
         is_local_dns=0
         echo -e "${RED}Проблема:${NC} Служба DNSCrypt-proxy не запущена"
     fi
