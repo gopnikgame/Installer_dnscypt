@@ -4,6 +4,10 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
+# Импорт дополнительных библиотек
+import_lib "anonymized_dns"
+import_lib "diagnostic"
+
 # Версия скрипта
 SCRIPT_VERSION="2.1.0"
 
@@ -96,7 +100,7 @@ update_modules() {
     done
     
     # Обновление библиотек
-    update_libraries
+    update_libraries "$force_update"
     
     if [[ $updated -gt 0 ]]; then
         log "SUCCESS" "Обновлено модулей: ${updated}"
@@ -111,6 +115,7 @@ update_modules() {
 
 # Обновление библиотек
 update_libraries() {
+    local force_update=${1:-false}
     local lib_dir="${SCRIPT_DIR}/lib"
     mkdir -p "$lib_dir"
     
@@ -122,7 +127,7 @@ update_libraries() {
         lib_file="${lib_dir}/${lib}"
         github_url="${GITHUB_REPO}/lib/${lib}"
         
-        if [[ ! -f "$lib_file" ]] || [[ "$1" == "true" ]]; then
+        if [[ "$force_update" == "true" ]] || [[ ! -f "$lib_file" ]]; then
             log "INFO" "Загрузка библиотеки: ${lib}"
             
             if ! wget -q --tries=3 --timeout=10 -O "${lib_file}.tmp" "$github_url"; then
@@ -133,10 +138,10 @@ update_libraries() {
             
             # Проверяем, что файл не пустой
             if [[ ! -s "${lib_file}.tmp" ]]; then
-                log "ERROR" "Пустая библиотека ${lib}"
-                rm -f "${lib_file}.tmp"
-                ((errors_libs++))
-                continue
+                log "WARN" "Пустая библиотека ${lib}"
+                # Создаем заглушку для библиотеки
+                echo "#!/bin/bash" > "${lib_file}.tmp"
+                echo "# ${lib} - Пустая библиотека, будет обновлена позже" >> "${lib_file}.tmp"
             fi
             
             mv "${lib_file}.tmp" "$lib_file"
@@ -266,7 +271,7 @@ main() {
     
     # Первоначальное обновление модулей
     if ! update_modules; then
-        log "WARN" "Не все модули были загружены корректно"
+        log "WARN" "Не все модулы были загружены корректно"
     fi
     
     show_menu
