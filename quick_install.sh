@@ -157,7 +157,7 @@ main() {
         echo
         
         # Небольшая задержка перед запуском
-        sleep 2
+        sleep 1
         
         # Запуск основного скрипта
         /usr/local/bin/dnscrypt_manager
