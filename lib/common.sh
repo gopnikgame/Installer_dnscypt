@@ -221,5 +221,198 @@ update_modules() {
     done
 }
 
+# Функция для проверки текущих настроек
+check_current_settings() {
+    log "INFO" "=== Текущие настройки DNSCrypt ==="
+    
+    if [ ! -f "$DNSCRYPT_CONFIG" ]; then
+        log "ERROR" "Файл конфигурации не найден!"
+        return 1
+    fi
+
+    echo -e "\n${BLUE}Текущие DNS серверы:${NC}"
+    grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = //'
+
+    echo -e "\n${BLUE}Протоколы и безопасность:${NC}"
+    echo -n "DNSSEC: "
+    if grep -q "require_dnssec = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -n "NoLog: "
+    if grep -q "require_nolog = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -n "NoFilter: "
+    if grep -q "require_nofilter = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -e "\n${BLUE}Прослушиваемые адреса:${NC}"
+    grep "listen_addresses" "$DNSCRYPT_CONFIG" | sed 's/listen_addresses = //'
+
+    echo -e "\n${BLUE}Поддерживаемые протоколы:${NC}"
+    echo -n "DNSCrypt: "
+    if grep -q "dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -n "DNS-over-HTTPS (DoH): "
+    if grep -q "doh_servers = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -n "HTTP/3 (QUIC): "
+    if grep -q "http3 = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -n "Oblivious DoH (ODoH): "
+    if grep -q "odoh_servers = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включен${NC}"
+    else
+        echo -e "${RED}Выключен${NC}"
+    fi
+
+    echo -e "\n${BLUE}Настройки кэша:${NC}"
+    echo -n "Кэширование: "
+    if grep -q "cache = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включено${NC}"
+        echo "Размер кэша: $(grep "cache_size" "$DNSCRYPT_CONFIG" | sed 's/cache_size = //')"
+        echo "Минимальное TTL: $(grep "cache_min_ttl" "$DNSCRYPT_CONFIG" | sed 's/cache_min_ttl = //')"
+        echo "Максимальное TTL: $(grep "cache_max_ttl" "$DNSCRYPT_CONFIG" | sed 's/cache_max_ttl = //')"
+    else
+        echo -e "${RED}Выключено${NC}"
+    fi
+    
+    echo -e "\n${BLUE}Дополнительные настройки:${NC}"
+    echo -n "Блокировка IPv6: "
+    if grep -q "block_ipv6 = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включена${NC}"
+    else
+        echo -e "${RED}Выключена${NC}"
+    fi
+
+    echo -n "Горячая перезагрузка конфигурации: "
+    if grep -q "enable_hot_reload = true" "$DNSCRYPT_CONFIG"; then
+        echo -e "${GREEN}Включена${NC}"
+    else
+        echo -e "${RED}Выключена${NC}"
+    fi
+}
+
+# Функция для проверки применения настроек
+verify_settings() {
+    local server_name="$1"
+    log "INFO" "Проверка применения настроек..."
+    
+    # Проверка статуса службы
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        log "ERROR" "Служба DNSCrypt не запущена"
+        return 1
+    fi
+
+    # Проверка логов на наличие ошибок
+    if journalctl -u dnscrypt-proxy -n 50 | grep -i error > /dev/null; then
+        log "WARN" "В логах обнаружены ошибки:"
+        journalctl -u dnscrypt-proxy -n 50 | grep -i error
+    fi
+
+    # Проверка резолвинга
+    echo -e "\n${BLUE}Проверка DNS резолвинга:${NC}"
+    local test_domains=("google.com" "cloudflare.com" "github.com")
+    local success=true
+
+    for domain in "${test_domains[@]}"; do
+        echo -n "Тест $domain: "
+        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
+            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
+            echo -e "${GREEN}OK${NC} (${resolve_time}ms)"
+        else
+            echo -e "${RED}ОШИБКА${NC}"
+            success=false
+        fi
+    done
+
+    # Проверка используемого сервера
+    echo -e "\n${BLUE}Проверка активного DNS сервера:${NC}"
+    local current_server=$(dig +short resolver.dnscrypt.info TXT | grep -o '".*"' | tr -d '"')
+    if [ -n "$current_server" ]; then
+        echo "Активный сервер: $current_server"
+    else
+        echo -e "${RED}Не удалось определить активный сервер${NC}"
+        success=false
+    fi
+
+    if [ "$success" = true ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Функция для расширенной проверки конфигурации
+extended_verify_config() {
+    echo -e "\n${BLUE}Расширенная проверка конфигурации DNSCrypt:${NC}"
+    
+    # Проверка конфигурации
+    if cd "$(dirname "$DNSCRYPT_CONFIG")" && dnscrypt-proxy -check; then
+        log "SUCCESS" "${GREEN}Конфигурация успешно проверена${NC}"
+        
+        # Проверка активных DNS-серверов
+        echo -e "\n${YELLOW}==== DNSCrypt активные соединения ====${NC}"
+        journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Connected to|Server with lowest" | tail -10
+
+        echo -e "\n${YELLOW}==== Текущий DNS сервер ====${NC}"
+        dig +short resolver.dnscrypt.info TXT | tr -d '"'
+
+        echo -e "\n${YELLOW}==== Тестирование доступности серверов ====${NC}"
+        for domain in google.com cloudflare.com facebook.com example.com; do
+            echo -n "Запрос $domain: "
+            time=$(dig @127.0.0.1 +noall +stats "$domain" | grep "Query time" | awk '{print $4}')
+            if [ -n "$time" ]; then
+                echo -e "${GREEN}OK ($time ms)${NC}"
+            else
+                echo -e "${RED}ОШИБКА${NC}"
+            fi
+        done
+
+        echo -e "\n${YELLOW}==== Проверка DNSSEC ====${NC}"
+        dig @127.0.0.1 dnssec-tools.org +dnssec +short
+        
+        # Проверка используемого протокола
+        echo -e "\n${YELLOW}==== Информация о протоколе ====${NC}"
+        local protocol_info=$(journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Using protocol|Using transport" | tail -1)
+        if [ -n "$protocol_info" ]; then
+            echo -e "${GREEN}$protocol_info${NC}"
+        else
+            echo -e "${YELLOW}Информация о протоколе не найдена${NC}"
+        fi
+        
+        # Проверка индикатора загрузки
+        local load_info=$(systemctl status dnscrypt-proxy | grep "Memory\|CPU")
+        if [ -n "$load_info" ]; then
+            echo -e "\n${YELLOW}==== Ресурсы системы ====${NC}"
+            echo "$load_info"
+        fi
+        
+    else
+        log "ERROR" "${RED}Ошибка в конфигурации${NC}"
+    fi
+}
+
 # Инициализация при первом запуске
 init_system
