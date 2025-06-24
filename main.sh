@@ -28,9 +28,7 @@ declare -a MODULE_ORDER=(
     "check_dns.sh"
     "change_dns.sh"
     "fix_dns.sh"
-    "manage_service.sh"
     "clear_cache.sh"
-    "backup.sh"
     "restore.sh"
 )
 
@@ -41,9 +39,7 @@ declare -A MODULES=(
     ["check_dns.sh"]="Проверка текущей конфигурации DNS"
     ["change_dns.sh"]="Настройка DNS серверов и протоколов"
     ["fix_dns.sh"]="Настройка анонимного DNS и балансировки"
-    ["manage_service.sh"]="Управление службой"
     ["clear_cache.sh"]="Очистка кэша"
-    ["backup.sh"]="Создание резервной копии"
     ["restore.sh"]="Восстановление из резервной копии"
 )
 
@@ -54,9 +50,7 @@ declare -A MODULE_DETAILS=(
     ["check_dns.sh"]="Проверка текущих DNS-серверов, тестирование скорости резолвинга и определение DNS-провайдера"
     ["change_dns.sh"]="Изменение DNS-серверов, настройка протоколов (DNSCrypt/DoH/ODoH), параметров кэширования и безопасности (DNSSEC/NoLog/NoFilter)"
     ["fix_dns.sh"]="Настройка анонимного DNS через релеи, балансировки нагрузки между серверами и тестирование скорости соединения"
-    ["manage_service.sh"]="Управление службой DNSCrypt-proxy (запуск, остановка, перезапуск)"
     ["clear_cache.sh"]="Очистка кэша DNS для обновления информации о серверах"
-    ["backup.sh"]="Создание резервных копий конфигураций DNSCrypt"
     ["restore.sh"]="Восстановление конфигураций из резервных копий"
 )
 
