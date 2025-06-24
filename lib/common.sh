@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Версия библиотеки
-LIB_VERSION="1.0.0"
+LIB_VERSION="1.1.0"
 
 # Цветовые коды для вывода
 RED='\033[0;31m'
@@ -11,17 +11,39 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Пути
+# Пути к основным файлам
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
 BACKUP_DIR="/var/backup/dnscrypt"
 LOG_DIR="/var/log/dnscrypt"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Пути к дополнительным файлам и кэшам
+RELAYS_CACHE="/etc/dnscrypt-proxy/relays.md"
+SERVERS_CACHE="/etc/dnscrypt-proxy/public-resolvers.md"
+ODOH_SERVERS_CACHE="/etc/dnscrypt-proxy/odoh-servers.md"
+ODOH_RELAYS_CACHE="/etc/dnscrypt-proxy/odoh-relays.md"
+RESOLV_CONF="/etc/resolv.conf"
+DNSCRYPT_SERVICE="dnscrypt-proxy"
 
 # Инициализация системы
 init_system() {
     mkdir -p "$BACKUP_DIR"
     mkdir -p "$LOG_DIR"
     chmod 755 "$BACKUP_DIR" "$LOG_DIR"
+}
+
+# Импорт дополнительных библиотек
+import_lib() {
+    local lib_name="$1"
+    local lib_path="${SCRIPT_DIR}/lib/${lib_name}.sh"
+    
+    if [ -f "$lib_path" ]; then
+        source "$lib_path"
+        return 0
+    else
+        log "ERROR" "Библиотека '$lib_name' не найдена по пути: $lib_path"
+        return 1
+    fi
 }
 
 # Функция логирования
@@ -412,6 +434,355 @@ extended_verify_config() {
     else
         log "ERROR" "${RED}Ошибка в конфигурации${NC}"
     fi
+}
+
+# Функция для проверки и вывода типа анонимизации DNS
+check_anonymized_dns() {
+    log "INFO" "Проверка текущей конфигурации анонимного DNS..."
+    
+    if [ ! -f "$DNSCRYPT_CONFIG" ]; then
+        log "ERROR" "Файл конфигурации DNSCrypt не найден: $DNSCRYPT_CONFIG"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}Текущие настройки анонимизации DNS:${NC}"
+    
+    # Проверка секции anonymized_dns
+    if grep -q "\[anonymized_dns\]" "$DNSCRYPT_CONFIG"; then
+        echo "Секция anonymized_dns: ${GREEN}найдена${NC}"
+        
+        # Проверка маршрутов
+        if grep -A 10 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep -q "routes"; then
+            echo -e "Настроенные маршруты:"
+            grep -A 20 "routes = \[" "$DNSCRYPT_CONFIG" | grep -v "^\[" | grep -v "^$" | sed 's/^/    /'
+        else
+            echo "Маршруты: ${RED}не настроены${NC}"
+        fi
+        
+        # Проверка skip_incompatible
+        local skip_incompatible=$(grep -A 5 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep "skip_incompatible" | cut -d'=' -f2 | tr -d ' ')
+        if [ -n "$skip_incompatible" ]; then
+            if [ "$skip_incompatible" = "true" ]; then
+                echo "Пропуск несовместимых: ${GREEN}включен${NC}"
+            else
+                echo "Пропуск несовместимых: ${RED}выключен${NC}"
+            fi
+        else
+            echo "Пропуск несовместимых: ${YELLOW}не настроен (по умолчанию выключен)${NC}"
+        fi
+    else
+        echo "Секция anonymized_dns: ${RED}не найдена${NC}"
+    fi
+    
+    # Проверка настроек ODoH
+    echo -e "\n${BLUE}Настройки Oblivious DoH (ODoH):${NC}"
+    
+    # Проверка поддержки ODoH
+    if grep -q "odoh_servers = true" "$DNSCRYPT_CONFIG"; then
+        echo "Поддержка ODoH: ${GREEN}включена${NC}"
+    else
+        echo "Поддержка ODoH: ${RED}выключена${NC}"
+    fi
+    
+    # Проверка источников ODoH
+    if grep -q "\[sources.odoh-servers\]" "$DNSCRYPT_CONFIG"; then
+        echo "Источник ODoH-серверов: ${GREEN}настроен${NC}"
+    else
+        echo "Источник ODoH-серверов: ${RED}не настроен${NC}"
+    fi
+    
+    if grep -q "\[sources.odoh-relays\]" "$DNSCRYPT_CONFIG"; then
+        echo "Источник ODoH-релеев: ${GREEN}настроен${NC}"
+    else
+        echo "Источник ODoH-релеев: ${RED}не настроен${NC}"
+    fi
+    
+    # Проверка списков серверов и релеев
+    echo -e "\n${BLUE}Настройки источников списков:${NC}"
+    if grep -q "\[sources.'relays'\]" "$DNSCRYPT_CONFIG"; then
+        echo "Источник релеев для Anonymized DNSCrypt: ${GREEN}настроен${NC}"
+    else
+        echo "Источник релеев для Anonymized DNSCrypt: ${RED}не настроен${NC}"
+    fi
+}
+
+# Функция для вывода доступных серверов DNSCrypt
+list_available_servers() {
+    # Проверка наличия кэш-файла с серверами
+    if [ ! -f "$SERVERS_CACHE" ]; then
+        echo -e "${YELLOW}Файл с серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
+        return 1
+    fi
+    
+    # Читаем и выводим список DNSCrypt-серверов
+    echo -e "${YELLOW}Список может быть большим. Показаны только первые 20 серверов.${NC}"
+    grep -A 1 "^## " "$SERVERS_CACHE" | grep -v "^--" | head -n 40 | sed 'N;s/\n/ - /' | sed 's/## //' | nl
+    
+    echo -e "\n${YELLOW}Для просмотра полного списка серверов выполните:${NC}"
+    echo "cat $SERVERS_CACHE | grep -A 1 '^## ' | grep -v '^--' | sed 'N;s/\\n/ - /' | sed 's/## //'"
+}
+
+# Функция для вывода доступных релеев
+list_available_relays() {
+    # Проверка наличия кэш-файла с релеями
+    if [ ! -f "$RELAYS_CACHE" ]; then
+        echo -e "${YELLOW}Файл с релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
+        return 1
+    fi
+    
+    # Читаем и выводим список релеев
+    grep -A 1 "^## " "$RELAYS_CACHE" | grep -v "^--" | sed 'N;s/\n/ - /' | sed 's/## //' | nl
+}
+
+# Функция для вывода доступных ODoH-серверов
+list_available_odoh_servers() {
+    # Проверка наличия кэш-файла с ODoH-серверами
+    if [ ! -f "$ODOH_SERVERS_CACHE" ]; then
+        echo -e "${YELLOW}Файл с ODoH-серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
+        return 1
+    fi
+    
+    # Читаем и выводим список ODoH-серверов
+    grep -A 1 "^## " "$ODOH_SERVERS_CACHE" | grep -v "^--" | sed 'N;s/\n/ - /' | sed 's/## //' | nl
+}
+
+# Функция для вывода доступных ODoH-релеев
+list_available_odoh_relays() {
+    # Проверка наличия кэш-файла с ODoH-релеями
+    if [ ! -f "$ODOH_RELAYS_CACHE" ]; then
+        echo -e "${YELLOW}Файл с ODoH-релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
+        return 1
+    fi
+    
+    # Читаем и выводим список ODoH-релеев
+    grep -A 1 "^## " "$ODOH_RELAYS_CACHE" | grep -v "^--" | sed 'N;s/\n/ - /' | sed 's/## //' | nl
+}
+
+# Тестирование скорости серверов
+test_server_latency() {
+    log "INFO" "Тестирование времени отклика DNS-серверов..."
+    
+    echo -e "\n${BLUE}Тестирование времени отклика:${NC}"
+    echo "Этот тест измеряет время ответа каждого настроенного DNS-сервера."
+    echo "Результаты помогут выбрать наиболее быстрые серверы для вашего местоположения."
+    
+    # Проверяем зависимости
+    check_dependencies dig
+    
+    # Получаем список настроенных серверов
+    local server_names_line=$(grep "server_names" "$DNSCRYPT_CONFIG" | head -1)
+    
+    if [ -z "$server_names_line" ]; then
+        log "ERROR" "Настроенные серверы не найдены в конфигурации"
+        return 1
+    fi
+    
+    # Извлекаем только значение массива серверов
+    local server_list=$(echo "$server_names_line" | grep -o "\[\([^]]*\)\]" | sed -e "s/\[//" -e "s/\]//" | tr -d "'" | tr -d '"' | tr ',' ' ')
+    
+    if [ -z "$server_list" ]; then
+        server_list=$(dnscrypt-proxy -list -config "$DNSCRYPT_CONFIG" 2>/dev/null | grep -E "^[^ ]+" | cut -d' ' -f1 | grep -v "^$")
+        
+        if [ -z "$server_list" ]; then
+            log "ERROR" "Не удалось определить список настроенных серверов"
+            echo -e "${YELLOW}Проверьте корректность конфигурации DNSCrypt (server_names).${NC}"
+            return 1
+        fi
+    fi
+    
+    echo -e "\n${YELLOW}Настроенные серверы:${NC} $server_list"
+    echo -e "\n${BLUE}Выполняется тестирование, пожалуйста, подождите...${NC}"
+    
+    # Создаем временный файл для результатов
+    local tmp_file=$(mktemp)
+    
+    # Тестируем каждый сервер
+    for server in $server_list; do
+        # Пропускаем пустые имена или явно некорректные значения
+        if [ -z "$server" ] || [[ "$server" == "#"* ]] || [ ${#server} -lt 3 ]; then
+            continue
+        fi
+        
+        echo -n "Тестирование сервера $server... "
+        
+        # Получаем текущий IP сервера из логов dnscrypt-proxy
+        local server_ip=$(journalctl -u dnscrypt-proxy -n 200 | grep -i "$server" | grep -o -E "\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1 | tr -d '(' || echo "")
+        
+        # Выполняем тестовые запросы
+        local best_time=999999
+        for i in {1..3}; do
+            local time=$(dig @127.0.0.1 +timeout=2 +tries=1 example.com | grep "Query time" | awk '{print $4}')
+            
+            if [ -n "$time" ] && [ "$time" -lt "$best_time" ]; then
+                best_time=$time
+            fi
+            sleep 0.5
+        done
+        
+        if [ "$best_time" -eq 999999 ]; then
+            best_time="таймаут"
+            echo -e "${RED}$best_time${NC}"
+        else
+            best_time="${best_time}ms"
+            echo -e "${GREEN}$best_time${NC} $server_ip"
+            echo "$server $best_time $server_ip" >> "$tmp_file"
+        fi
+    done
+    
+    # Проверяем, есть ли результаты
+    if [ ! -s "$tmp_file" ]; then
+        echo -e "\n${RED}Не удалось получить результаты тестирования для серверов.${NC}"
+        echo -e "${YELLOW}Возможно, серверы недоступны или некорректно настроены.${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    
+    # Сортируем и выводим результаты от самого быстрого к самому медленному
+    echo -e "\n${BLUE}Результаты тестирования (отсортированы по времени отклика):${NC}"
+    sort -k2 -n "$tmp_file" | sed 's/ms//g' | awk '{printf "%-30s %-15s", $1, $2"ms"; for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | \
+        awk 'BEGIN {print "Сервер                         Время отклика    IP адрес"; print "----------------------------------------------------------------------"}; {print $0}'
+    
+    # Удаляем временный файл
+    rm -f "$tmp_file"
+    
+    return 0
+}
+
+# Функция для настройки балансировки нагрузки
+configure_load_balancing() {
+    log "INFO" "Настройка стратегии балансировки нагрузки..."
+    
+    echo -e "\n${BLUE}Стратегии балансировки нагрузки:${NC}"
+    echo "Стратегия балансировки определяет, как выбираются серверы для запросов из отсортированного списка (от самого быстрого к самому медленному)."
+    echo
+    echo "Доступные стратегии:"
+    echo -e "${YELLOW}first${NC} - всегда выбирается самый быстрый сервер" 
+    echo -e "${YELLOW}p2${NC} - случайный выбор из 2 самых быстрых серверов (рекомендуется)"
+    echo -e "${YELLOW}ph${NC} - случайный выбор из быстрейшей половины серверов"
+    echo -e "${YELLOW}random${NC} - случайный выбор из всех серверов"
+    echo
+    
+    # Получаем текущую стратегию
+    local current_strategy=$(grep "lb_strategy = " "$DNSCRYPT_CONFIG" | sed "s/lb_strategy = '\(.*\)'/\1/" | tr -d ' ' || echo "p2")
+    
+    echo -e "Текущая стратегия: ${GREEN}$current_strategy${NC}"
+    echo
+    echo "1) first (самый быстрый сервер)"
+    echo "2) p2 (топ-2 серверов)"
+    echo "3) ph (быстрейшая половина)"
+    echo "4) random (случайный выбор)"
+    echo "0) Отмена"
+    
+    read -p "Выберите стратегию (0-4): " lb_choice
+    
+    local new_strategy=""
+    case $lb_choice in
+        1) new_strategy="first" ;;
+        2) new_strategy="p2" ;;
+        3) new_strategy="ph" ;;
+        4) new_strategy="random" ;;
+        0) return 0 ;;
+        *) 
+            log "ERROR" "Неверный выбор"
+            return 1
+            ;;
+    esac
+    
+    if [ -n "$new_strategy" ]; then
+        # Обновляем стратегию в конфиге
+        if grep -q "lb_strategy = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/lb_strategy = .*/lb_strategy = '$new_strategy'/" "$DNSCRYPT_CONFIG"
+        else
+            # Добавляем новую опцию после [sources]
+            sed -i "/\[sources\]/i lb_strategy = '$new_strategy'" "$DNSCRYPT_CONFIG"
+        fi
+        
+        log "SUCCESS" "Стратегия балансировки изменена на '$new_strategy'"
+        
+        # Перезапускаем службу
+        restart_service "$DNSCRYPT_SERVICE"
+    fi
+    
+    return 0
+}
+
+# Функция для добавления конфигурационной опции
+add_config_option() {
+    local config_file="$1"
+    local section="$2"
+    local option="$3"
+    local value="$4"
+    
+    # Проверяем, существует ли уже опция
+    if grep -q "^${option}\s*=" "$config_file"; then
+        # Опция существует, обновляем ее
+        sed -i "s|^${option}\s*=.*|${option} = ${value}|" "$config_file"
+    else
+        # Опция не существует, добавляем ее
+        if [ -n "$section" ]; then
+            # Добавляем в указанную секцию
+            if grep -q "^\[${section}\]" "$config_file"; then
+                # Секция существует
+                sed -i "/^\[${section}\]/a ${option} = ${value}" "$config_file"
+            else
+                # Секция не существует, создаем ее
+                echo -e "\n[${section}]\n${option} = ${value}" >> "$config_file"
+            fi
+        else
+            # Добавляем в основную часть конфигурации
+            echo "${option} = ${value}" >> "$config_file"
+        fi
+    fi
+    
+    log "INFO" "Настройка ${option} = ${value} добавлена в конфигурацию"
+    return 0
+}
+
+# Функция для проверки наличия процесса, использующего порт
+check_port_usage() {
+    local port="$1"
+    local processes=$(lsof -i ":$port" | grep -v "^COMMAND")
+    
+    if [ -n "$processes" ]; then
+        echo -e "\n${YELLOW}Порт $port используется следующими процессами:${NC}"
+        echo "$processes"
+        return 1
+    else
+        echo -e "\n${GREEN}Порт $port свободен${NC}"
+        return 0
+    fi
+}
+
+# Функция для очистки DNS кэша
+clear_dns_cache() {
+    log "INFO" "Очистка DNS кэша..."
+    
+    # Очистка кэша systemd-resolved (если используется)
+    if systemctl is-active --quiet systemd-resolved; then
+        systemd-resolve --flush-caches
+        log "SUCCESS" "Кэш systemd-resolved очищен"
+    fi
+    
+    # Очистка кэша DNSCrypt (требуется перезапуск)
+    if systemctl is-active --quiet dnscrypt-proxy; then
+        systemctl restart dnscrypt-proxy
+        log "SUCCESS" "Служба DNSCrypt перезапущена для очистки кэша"
+    fi
+    
+    # Очистка кэша nscd (если установлен)
+    if command -v nscd &>/dev/null && systemctl is-active --quiet nscd; then
+        systemctl restart nscd
+        log "SUCCESS" "Кэш nscd очищен"
+    fi
+    
+    # Очистка локального кэша dnsmasq (если установлен)
+    if command -v dnsmasq &>/dev/null && systemctl is-active --quiet dnsmasq; then
+        systemctl restart dnsmasq
+        log "SUCCESS" "Кэш dnsmasq очищен"
+    fi
+    
+    log "SUCCESS" "Очистка DNS кэша завершена"
+    return 0
 }
 
 # Инициализация при первом запуске

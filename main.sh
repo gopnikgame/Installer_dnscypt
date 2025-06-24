@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 # Версия скрипта
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 
 # Константы
 MODULES_DIR="${SCRIPT_DIR}/modules"
@@ -19,6 +19,7 @@ declare -a MODULE_ORDER=(
     "check_dns.sh"
     "change_dns.sh"
     "fix_dns.sh"
+    "manage_anonymized_dns.sh"
     "clear_cache.sh"
     "restore.sh"
 )
@@ -29,6 +30,7 @@ declare -A MODULES=(
     ["check_dns.sh"]="Проверка DNS"
     ["change_dns.sh"]="Изменение настроек DNS"
     ["fix_dns.sh"]="Исправление проблем DNS"
+    ["manage_anonymized_dns.sh"]="Управление анонимным DNS"
     ["clear_cache.sh"]="Очистка кэша"
     ["restore.sh"]="Восстановление из резервной копии"
 )
@@ -39,6 +41,7 @@ declare -A MODULE_DESCRIPTIONS=(
     ["check_dns.sh"]="Диагностика текущей конфигурации DNS"
     ["change_dns.sh"]="Изменение серверов DNS и параметров безопасности"
     ["fix_dns.sh"]="Исправление распространенных проблем с DNS"
+    ["manage_anonymized_dns.sh"]="Настройка и управление анонимизацией DNS (DNSCrypt и ODoH)"
     ["clear_cache.sh"]="Очистка кэша DNS и DNSCrypt"
     ["restore.sh"]="Восстановление предыдущих конфигураций"
 )
@@ -91,7 +94,10 @@ update_modules() {
             log "INFO" "Модуль ${module} уже актуален"
         fi
     done
-
+    
+    # Обновление библиотек
+    update_libraries
+    
     if [[ $updated -gt 0 ]]; then
         log "SUCCESS" "Обновлено модулей: ${updated}"
     fi
@@ -101,6 +107,51 @@ update_modules() {
     fi
     
     return $errors
+}
+
+# Обновление библиотек
+update_libraries() {
+    local lib_dir="${SCRIPT_DIR}/lib"
+    mkdir -p "$lib_dir"
+    
+    local libs=("common.sh" "anonymized_dns.sh" "diagnostic.sh")
+    local updated_libs=0
+    local errors_libs=0
+    
+    for lib in "${libs[@]}"; do
+        lib_file="${lib_dir}/${lib}"
+        github_url="${GITHUB_REPO}/lib/${lib}"
+        
+        if [[ ! -f "$lib_file" ]] || [[ "$1" == "true" ]]; then
+            log "INFO" "Загрузка библиотеки: ${lib}"
+            
+            if ! wget -q --tries=3 --timeout=10 -O "${lib_file}.tmp" "$github_url"; then
+                log "ERROR" "Ошибка загрузки библиотеки ${lib}"
+                ((errors_libs++))
+                continue
+            fi
+            
+            # Проверяем, что файл не пустой
+            if [[ ! -s "${lib_file}.tmp" ]]; then
+                log "ERROR" "Пустая библиотека ${lib}"
+                rm -f "${lib_file}.tmp"
+                ((errors_libs++))
+                continue
+            fi
+            
+            mv "${lib_file}.tmp" "$lib_file"
+            ((updated_libs++))
+            log "SUCCESS" "Библиотека ${lib} успешно обновлена"
+        fi
+    done
+    
+    if [[ $updated_libs -gt 0 ]]; then
+        log "SUCCESS" "Обновлено библиотек: ${updated_libs}"
+    fi
+    
+    if [[ $errors_libs -gt 0 ]]; then
+        log "WARN" "Ошибок при обновлении библиотек: ${errors_libs}"
+    fi
 }
 
 # Запуск модуля

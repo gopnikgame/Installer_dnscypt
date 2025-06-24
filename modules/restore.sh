@@ -3,34 +3,34 @@
 # Created: 2025-02-16 14:17:12
 # Author: gopnikgame
 
-# Константы
-BACKUP_DIR="/root/dnscrypt_backup"
-DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
+# Подключение общей библиотеки
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+# Локальный путь для бэкапов (переопределяем общий BACKUP_DIR)
+LOCAL_BACKUP_DIR="/root/dnscrypt_backup"
 RESOLV_CONF="/etc/resolv.conf"
 DNSCRYPT_SERVICE="dnscrypt-proxy"
 
-# Функция логирования
-log() {
-    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    echo "$timestamp [$1] $2"
-}
-
 restore_backup() {
-    log "INFO" "=== Восстановление из резервной копии ==="
+    print_header "ВОССТАНОВЛЕНИЕ ИЗ РЕЗЕРВНОЙ КОПИИ"
+    
+    # Проверка root-прав
+    check_root
     
     # Проверка наличия бэкапов
-    if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR")" ]; then
-        log "ERROR" "Резервные копии не найдены"
+    if [ ! -d "$LOCAL_BACKUP_DIR" ] || [ -z "$(ls -A "$LOCAL_BACKUP_DIR")" ]; then
+        log "ERROR" "Резервные копии не найдены в $LOCAL_BACKUP_DIR"
         return 1
     fi
     
     # Список доступных бэкапов
-    local backups=($(ls -1 "$BACKUP_DIR"))
+    local backups=($(ls -1 "$LOCAL_BACKUP_DIR"))
     
-    echo "Доступные резервные копии:"
+    echo -e "${BLUE}Доступные резервные копии:${NC}"
     local i=1
     for backup in "${backups[@]}"; do
-        echo "$i) $backup"
+        echo -e "${CYAN}$i)${NC} $backup"
         ((i++))
     done
     
@@ -43,7 +43,7 @@ restore_backup() {
     fi
     
     local selected_backup="${backups[$((choice-1))]}"
-    local backup_path="$BACKUP_DIR/$selected_backup"
+    local backup_path="$LOCAL_BACKUP_DIR/$selected_backup"
     
     # Подтверждение
     read -p "Восстановить из бэкапа $selected_backup? (y/n): " confirm
@@ -53,7 +53,7 @@ restore_backup() {
     fi
     
     # Остановка службы
-    log "INFO" "Остановка DNSCrypt..."
+    log "INFO" "Остановка службы $DNSCRYPT_SERVICE..."
     systemctl stop $DNSCRYPT_SERVICE
     
     # Восстановление файлов
@@ -61,8 +61,12 @@ restore_backup() {
     
     # Восстановление конфигурации DNSCrypt
     if [ -f "$backup_path/$(basename "$DNSCRYPT_CONFIG")" ]; then
-        cp "$backup_path/$(basename "$DNSCRYPT_CONFIG")" "$DNSCRYPT_CONFIG"
-        log "INFO" "Восстановлена конфигурация DNSCrypt"
+        # Используем функцию restore_config из common.sh
+        if restore_config "$DNSCRYPT_CONFIG" "$backup_path/$(basename "$DNSCRYPT_CONFIG")"; then
+            log "SUCCESS" "Восстановлена конфигурация DNSCrypt"
+        else
+            restore_status=$((restore_status + 1))
+        fi
     else
         log "WARN" "Конфигурация DNSCrypt не найдена в бэкапе"
         restore_status=$((restore_status + 1))
@@ -73,9 +77,15 @@ restore_backup() {
         if ! chattr -i "$RESOLV_CONF" 2>/dev/null; then
             log "INFO" "Снят атрибут immutable с resolv.conf"
         fi
-        cp "$backup_path/$(basename "$RESOLV_CONF")" "$RESOLV_CONF"
-        chattr +i "$RESOLV_CONF"
-        log "INFO" "Восстановлен resolv.conf"
+        
+        # Копирование resolv.conf и установка защиты от изменений
+        if cp "$backup_path/$(basename "$RESOLV_CONF")" "$RESOLV_CONF"; then
+            chattr +i "$RESOLV_CONF"
+            log "SUCCESS" "Восстановлен resolv.conf"
+        else
+            log "ERROR" "Ошибка восстановления resolv.conf"
+            restore_status=$((restore_status + 1))
+        fi
     else
         log "WARN" "resolv.conf не найден в бэкапе"
         restore_status=$((restore_status + 1))
@@ -83,9 +93,13 @@ restore_backup() {
     
     # Восстановление службы
     if [ -f "$backup_path/dnscrypt-proxy.service" ]; then
-        cp "$backup_path/dnscrypt-proxy.service" "/etc/systemd/system/"
-        systemctl daemon-reload
-        log "INFO" "Восстановлен файл службы"
+        if cp "$backup_path/dnscrypt-proxy.service" "/etc/systemd/system/"; then
+            systemctl daemon-reload
+            log "SUCCESS" "Восстановлен файл службы"
+        else
+            log "ERROR" "Ошибка восстановления файла службы"
+            restore_status=$((restore_status + 1))
+        fi
     else
         log "WARN" "Файл службы не найден в бэкапе"
         restore_status=$((restore_status + 1))
@@ -93,26 +107,38 @@ restore_backup() {
     
     # Запуск службы
     log "INFO" "Запуск DNSCrypt..."
-    systemctl start $DNSCRYPT_SERVICE
+    if ! systemctl start $DNSCRYPT_SERVICE; then
+        log "ERROR" "Ошибка запуска службы DNSCrypt"
+        systemctl status $DNSCRYPT_SERVICE --no-pager
+        return 1
+    fi
     
-    # Проверка результата
-    if systemctl is-active --quiet $DNSCRYPT_SERVICE; then
+    # Проверка результата с использованием функций из common.sh
+    if check_service_status $DNSCRYPT_SERVICE; then
         if [ $restore_status -eq 0 ]; then
             log "SUCCESS" "Восстановление выполнено успешно"
         else
             log "WARN" "Восстановление выполнено с предупреждениями"
         fi
         
-        # Проверка DNS
+        # Проверка DNS резолвинга
+        log "INFO" "Проверка DNS резолвинга..."
         if dig @127.0.0.1 google.com +short +timeout=5 > /dev/null; then
             log "SUCCESS" "DNS резолвинг работает"
+            
+            # Расширенная проверка конфигурации по запросу
+            read -p "Выполнить расширенную проверку конфигурации? (y/n): " verify_choice
+            if [[ "$verify_choice" =~ ^[Yy]$ ]]; then
+                extended_verify_config
+            fi
+            
             return 0
         else
             log "ERROR" "Проблема с DNS резолвингом после восстановления"
             return 1
         fi
     else
-        log "ERROR" "Ошибка при запуске службы после восстановления"
+        log "ERROR" "Служба $DNSCRYPT_SERVICE не запущена после восстановления"
         systemctl status $DNSCRYPT_SERVICE --no-pager
         return 1
     fi
