@@ -176,3 +176,81 @@ enable_odoh_support() {
     
     return 0
 }
+
+# Отключение поддержки ODoH
+disable_odoh_support() {
+    log "INFO" "Отключение поддержки Oblivious DoH..."
+    
+    # Отключение ODoH серверов
+    if grep -q "odoh_servers = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/odoh_servers = .*/odoh_servers = false/" "$DNSCRYPT_CONFIG"
+    else
+        # Добавляем после строки doh_servers
+        if grep -q "doh_servers = " "$DNSCRYPT_CONFIG"; then
+            sed -i "/doh_servers = /a odoh_servers = false" "$DNSCRYPT_CONFIG"
+        fi
+    fi
+    
+    log "SUCCESS" "Поддержка ODoH отключена"
+    
+    return 0
+}
+
+# Добавление источников ODoH
+add_odoh_sources() {
+    log "INFO" "Добавление источников для ODoH..."
+    
+    # Проверяем наличие секции [sources]
+    if ! grep -q "\[sources\]" "$DNSCRYPT_CONFIG"; then
+        log "ERROR" "Секция [sources] не найдена в конфигурации"
+        return 1
+    fi
+    
+    # Находим последнюю секцию sources для вставки
+    local last_sources_line=$(grep -n "\[sources." "$DNSCRYPT_CONFIG" | tail -n1 | cut -d':' -f1)
+    
+    if [ -z "$last_sources_line" ]; then
+        # Если нет других секций sources, вставляем после основной [sources]
+        local sources_line=$(grep -n "\[sources\]" "$DNSCRYPT_CONFIG" | cut -d':' -f1)
+        last_sources_line=$sources_line
+    fi
+    
+    # Добавляем источники ODoH серверов, если их нет
+    if ! grep -q "\[sources.odoh-servers\]" "$DNSCRYPT_CONFIG"; then
+        local insert_line=$((last_sources_line + 10))
+        sed -i "${insert_line}i\\
+\\
+  [sources.odoh-servers]\\
+  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/odoh-servers.md', 'https://download.dnscrypt.info/resolvers-list/v3/odoh-servers.md']\\
+  cache_file = 'odoh-servers.md'\\
+  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'\\
+  refresh_delay = 72" "$DNSCRYPT_CONFIG"
+        
+        log "SUCCESS" "Добавлен источник ODoH-серверов"
+        
+        # Обновляем последнюю секцию sources
+        last_sources_line=$(grep -n "\[sources." "$DNSCRYPT_CONFIG" | tail -n1 | cut -d':' -f1)
+    fi
+    
+    # Добавляем источники ODoH релеев, если их нет
+    if ! grep -q "\[sources.odoh-relays\]" "$DNSCRYPT_CONFIG"; then
+        local insert_line=$((last_sources_line + 10))
+        sed -i "${insert_line}i\\
+\\
+  [sources.odoh-relays]\\
+  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/odoh-relays.md', 'https://download.dnscrypt.info/resolvers-list/v3/odoh-relays.md']\\
+  cache_file = 'odoh-relays.md'\\
+  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'\\
+  refresh_delay = 72" "$DNSCRYPT_CONFIG"
+        
+        log "SUCCESS" "Добавлен источник ODoH-релеев"
+    fi
+    
+    return 0
+}
+
+# Настройка маршрутов для ODoH (объявляем функцию для избежания ошибок)
+configure_odoh_routes() {
+    log "INFO" "Функция настройки маршрутов ODoH вызывается из модуля manage_anonymized_dns"
+    return 0
+}

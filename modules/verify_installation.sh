@@ -4,31 +4,25 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
-# Константы
-DNSCRYPT_BINARY="/usr/local/bin/dnscrypt-proxy"
-DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
-SERVICE_NAME="dnscrypt-proxy.service"
+# Подключение библиотеки диагностики
+source "${SCRIPT_DIR}/lib/diagnostic.sh" 2>/dev/null || {
+    log "ERROR" "Не удалось подключить библиотеку diagnostic.sh"
+    log "INFO" "Продолжаем с ограниченным функционалом"
+}
 
 # Основная функция проверки
 verify_installation() {
+    print_header "ПРОВЕРКА УСТАНОВКИ DNSCRYPT"
     log "INFO" "Начало проверки установки DNSCrypt..."
     local errors=0
 
-    # Проверка бинарного файла
-    if [ -f "$DNSCRYPT_BINARY" ]; then
-        log "SUCCESS" "DNSCrypt бинарный файл найден"
-        if [ -x "$DNSCRYPT_BINARY" ]; then
-            log "SUCCESS" "DNSCrypt бинарный файл имеет права на выполнение"
-            # Показать версию DNSCrypt
-            local version
-            version=$("$DNSCRYPT_BINARY" --version 2>&1)
-            log "INFO" "Версия DNSCrypt: $version"
-        else
-            log "ERROR" "DNSCrypt бинарный файл не имеет прав на выполнение"
-            ((errors++))
-        fi
+    # Проверка наличия DNSCrypt-proxy
+    if check_dnscrypt_installed; then
+        # Показать версию DNSCrypt
+        local version
+        version=$(dnscrypt-proxy --version 2>&1)
+        log "INFO" "Версия DNSCrypt: $version"
     else
-        log "ERROR" "DNSCrypt бинарный файл не найден"
         log "INFO" "Для установки DNSCrypt используйте пункт 1 главного меню"
         ((errors++))
     fi
@@ -36,59 +30,73 @@ verify_installation() {
     # Проверка конфигурационного файла
     if [ -f "$DNSCRYPT_CONFIG" ]; then
         log "SUCCESS" "Конфигурационный файл найден"
+        
+        # Проверка конфигурации
+        echo -e "\n${BLUE}Проверка конфигурационного файла:${NC}"
+        if cd "$(dirname "$DNSCRYPT_CONFIG")" && dnscrypt-proxy -check; then
+            log "SUCCESS" "Конфигурация валидна"
+        else
+            log "ERROR" "Обнаружены ошибки в конфигурации"
+            ((errors++))
+        fi
     else
         log "ERROR" "Конфигурационный файл не найден"
         ((errors++))
     fi
 
-    # Проверка службы
-    if check_service_status "$SERVICE_NAME"; then
-        # Функция уже выводит сообщение об успехе
-        :
-    else
-        log "INFO" "Для управления службой используйте пункт 6 главного меню"
-        ((errors++))
-    fi
-
-    # Проверка порта 53
-    if lsof -i :53 | grep -q "dnscrypt"; then
-        log "SUCCESS" "DNSCrypt слушает порт 53"
-    else
+    # Проверка службы и её состояния
+    echo -e "\n${BLUE}Проверка состояния службы:${NC}"
+    check_dnscrypt_status
+    
+    # Проверка использования порта 53
+    echo -e "\n${BLUE}Проверка прослушивания порта 53:${NC}"
+    check_port_usage 53
+    if ! lsof -i :53 | grep -q "dnscrypt"; then
         log "ERROR" "DNSCrypt не слушает порт 53"
         ((errors++))
     fi
 
-    # Проверка DNS резолвинга
-    if dig @127.0.0.1 google.com +short +timeout=5 >/dev/null 2>&1; then
-        log "SUCCESS" "DNS резолвинг работает"
-        
-        print_header "Информация о DNS резолвинге"
-        echo "Текущий DNS сервер:"
-        dig +short resolver.dnscrypt.info TXT | sed 's/"//g'
-        
-        echo -e "\nВремя отклика для популярных доменов:"
-        for domain in google.com cloudflare.com github.com; do
-            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
-            echo "$domain: ${resolve_time}ms"
-        done
+    # Проверка системного резолвера
+    echo -e "\n${BLUE}Проверка системного резолвера:${NC}"
+    check_system_resolver
+
+    # Тестирование DNS резолвинга
+    echo -e "\n${BLUE}Проверка DNS резолвинга:${NC}"
+    if verify_settings ""; then
+        log "SUCCESS" "DNS резолвинг работает корректно"
     else
-        log "ERROR" "DNS резолвинг не работает"
+        log "ERROR" "Проблемы с DNS резолвингом"
         ((errors++))
+    fi
+
+    # Дополнительное тестирование скорости DNS, если всё работает нормально
+    if [ $errors -eq 0 ]; then
+        echo -e "\n${BLUE}Тестирование скорости DNS:${NC}"
+        test_dns_speed
     fi
 
     # Итоговый результат
     if [ $errors -eq 0 ]; then
+        print_header "РЕЗУЛЬТАТЫ ПРОВЕРКИ"
         log "SUCCESS" "Проверка завершена успешно. Ошибок не найдено"
         return 0
     else
+        print_header "РЕЗУЛЬТАТЫ ПРОВЕРКИ"
         log "ERROR" "Проверка завершена. Найдено ошибок: $errors"
         echo -e "\n${YELLOW}Для устранения ошибок:${NC}"
         echo "1. Установка DNSCrypt - пункт 1 главного меню"
         echo "2. Управление службой - пункт 6 главного меню"
-        echo "3. Изменение настроек DNS - пункт 3 главного меню"
+        echo "3. Исправление DNS резолвинга - пункт 5 главного меню"
+        echo "4. Изменение настроек DNS - пункт 3 главного меню"
         return 1
     fi
 }
+
+# Проверка root-прав
+check_root
+
+# Проверка зависимостей
+check_dependencies "dig" "lsof" "column"
 
 # Запуск проверки
 verify_installation

@@ -1,8 +1,12 @@
 #!/bin/bash
-# modules/change_dns.sh
+# modules/change_dns.sh - Модуль для изменения DNS-серверов и настроек DNSCrypt
+# Создано: 2025-06-24
+# Автор: gopnikgame
 
-# Подключаем общую библиотеку
-source "$(dirname "$0")/../lib/common.sh"
+# Подключаем общую библиотеку и diagnostic
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/diagnostic.sh"
 
 # Константы
 TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
@@ -23,7 +27,7 @@ apply_settings() {
     local cache="${12}"
     local hot_reload="${13}"
 
-    # Используем функцию backup_config из common.sh вместо локальной
+    # Создаем резервную копию перед изменениями
     backup_config "$DNSCRYPT_CONFIG" "dnscrypt-proxy"
 
     # Обновление настроек в конфигурационном файле
@@ -71,10 +75,11 @@ apply_settings() {
 
     log "INFO" "Настройки обновлены"
     
-    # Используем функцию restart_service из common.sh
+    # Перезапускаем службу
     restart_service "dnscrypt-proxy"
     sleep 2
 
+    # Проверяем применение настроек
     verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
 }
 
@@ -147,7 +152,6 @@ configure_http3() {
             ;;
     esac
     
-    # Используем функцию restart_service из common.sh
     restart_service "dnscrypt-proxy"
     
     return 0
@@ -291,7 +295,6 @@ configure_cache() {
             ;;
     esac
     
-    # Используем функцию restart_service из common.sh
     restart_service "dnscrypt-proxy"
     
     return 0
@@ -306,9 +309,10 @@ advanced_settings() {
         echo "3) Управление блокировкой IPv6"
         echo "4) Настройка источников DNS серверов"
         echo "5) Включить/выключить горячую перезагрузку"
+        echo "6) Тестировать скорость DNS-серверов"
         echo "0) Вернуться в основное меню"
         
-        read -p "Выберите опцию (0-5): " advanced_choice
+        read -p "Выберите опцию (0-6): " advanced_choice
         
         case $advanced_choice in
             1)
@@ -339,7 +343,6 @@ advanced_settings() {
                     log "SUCCESS" "${GREEN}Блокировка IPv6 отключена${NC}"
                 fi
                 
-                # Используем функцию restart_service из common.sh
                 restart_service "dnscrypt-proxy"
                 ;;
             4)
@@ -367,8 +370,11 @@ advanced_settings() {
                     log "SUCCESS" "${GREEN}Горячая перезагрузка отключена${NC}"
                 fi
                 
-                # Используем функцию restart_service из common.sh
                 restart_service "dnscrypt-proxy"
+                ;;
+            6)
+                # Используем функцию из diagnostic.sh
+                test_dns_speed
                 ;;
             0)
                 return 0
@@ -410,9 +416,10 @@ EOL
     
     echo -e "\n1) Добавить новый источник"
     echo "2) Удалить источник"
+    echo "3) Просмотреть доступные серверы"
     echo "0) Назад"
     
-    read -p "Выберите опцию (0-2): " source_option
+    read -p "Выберите опцию (0-3): " source_option
     
     case $source_option in
         1)
@@ -467,7 +474,6 @@ EOL
             
             log "SUCCESS" "${GREEN}Источник '$source_name' добавлен${NC}"
             
-            # Используем функцию restart_service из common.sh
             restart_service "dnscrypt-proxy"
             ;;
         2)
@@ -510,12 +516,30 @@ EOL
                 
                 log "SUCCESS" "${GREEN}Источник '$selected_source' удален${NC}"
                 
-                # Используем функцию restart_service из common.sh
                 restart_service "dnscrypt-proxy"
             else
                 log "ERROR" "${RED}Неверный выбор${NC}"
                 return 1
             fi
+            ;;
+        3)
+            echo -e "\n${BLUE}Доступные серверы:${NC}"
+            echo "1) Список DNSCrypt серверов"
+            echo "2) Список релеев"
+            echo "3) Список ODoH серверов"
+            echo "4) Список ODoH релеев"
+            echo "0) Назад"
+            
+            read -p "Выберите список для просмотра (0-4): " list_choice
+            
+            case $list_choice in
+                1) list_available_servers ;;
+                2) list_available_relays ;;
+                3) list_available_odoh_servers ;;
+                4) list_available_odoh_relays ;;
+                0) return 0 ;;
+                *) log "ERROR" "${RED}Неверный выбор${NC}" ;;
+            esac
             ;;
         0)
             return 0
@@ -692,10 +716,8 @@ configure_geo_servers() {
             sed -i "/lb_strategy = /a timeout = 2500" "$DNSCRYPT_CONFIG"
         fi
         
-        
         log "INFO" "DNS серверы изменены на $server_name"
         
-        # Используем функцию restart_service из common.sh
         restart_service "dnscrypt-proxy"
         sleep 2
         
@@ -707,17 +729,24 @@ configure_geo_servers() {
 
 # Основная функция изменения DNS
 change_dns() {
-    # Используем print_header из common.sh для отображения заголовка
+    # Отображение заголовка
     print_header "НАСТРОЙКА DNSCRYPT"
     
     # Проверка root-прав
     check_root
     
+    # Проверка установки DNSCrypt
+    if ! check_dnscrypt_installed; then
+        log "ERROR" "DNSCrypt-proxy не установлен. Установите его перед настройкой."
+        echo -e "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
+        return 1
+    }
+
     # Проверка существования конфигурационного файла
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
         log "ERROR" "Файл конфигурации DNSCrypt не найден"
         return 1
-    fi
+    }
 
     while true; do
         # Показать текущие настройки
@@ -730,9 +759,11 @@ change_dns() {
         echo "4) Настройки протоколов (IPv4/IPv6, DNSCrypt/DoH/ODoH)"
         echo "5) Расширенные настройки"
         echo "6) Проверить текущую конфигурацию"
+        echo "7) Тестировать скорость DNS серверов"
+        echo "8) Проверка безопасности DNS"
         echo "0) Выход"
         
-        read -p "Выберите опцию (0-6): " main_choice
+        read -p "Выберите опцию (0-8): " main_choice
         
         case $main_choice in
             1)
@@ -740,7 +771,7 @@ change_dns() {
                 ;;
             
             2)
-                # Оставляем прежний пункт меню с ручным выбором сервера
+                # Ручной выбор сервера
                 echo -e "\n${BLUE}Доступные предустановленные серверы:${NC}"
                 echo "1) cloudflare (Cloudflare)"
                 echo "2) google (Google DNS)"
@@ -801,12 +832,11 @@ change_dns() {
                     sed -i "s/server_names = .*/server_names = $server_name/" "$DNSCRYPT_CONFIG"
                     log "INFO" "DNS сервер изменен на $server_name"
                     
-                    # Используем функцию restart_service из common.sh
                     restart_service "dnscrypt-proxy"
                     sleep 2
                     
                     verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
-                fi
+                }
                 ;;
             
             3)
@@ -831,7 +861,6 @@ change_dns() {
                 
                 log "INFO" "Настройки безопасности обновлены"
                 
-                # Используем функцию restart_service из common.sh
                 restart_service "dnscrypt-proxy"
                 sleep 2
                 ;;
@@ -868,7 +897,6 @@ change_dns() {
                 
                 log "INFO" "Настройки протоколов обновлены"
                 
-                # Используем функцию restart_service из common.sh
                 restart_service "dnscrypt-proxy"
                 sleep 2
                 ;;
@@ -879,6 +907,16 @@ change_dns() {
                 
             6)
                 extended_verify_config
+                ;;
+                
+            7)
+                # Используем функцию из diagnostic.sh
+                test_dns_speed
+                ;;
+                
+            8)
+                # Используем функцию из diagnostic.sh
+                check_dns_security
                 ;;
                 
             0)

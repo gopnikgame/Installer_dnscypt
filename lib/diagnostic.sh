@@ -139,11 +139,12 @@ check_dnscrypt_status() {
     
     echo -e "\n${BLUE}Проверка файла конфигурации:${NC}"
     if [ -f "$DNSCRYPT_CONFIG" ]; then
-        dnscrypt-proxy -config "$DNSCRYPT_CONFIG" -check 2>/dev/null
+        check_output=$(dnscrypt-proxy -config "$DNSCRYPT_CONFIG" -check 2>&1)
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}Конфигурационный файл корректен${NC}"
         else
             echo -e "${RED}Ошибки в конфигурационном файле${NC}"
+            echo "$check_output" | grep -i error
         fi
     else
         echo -e "${RED}Конфигурационный файл не найден${NC}"

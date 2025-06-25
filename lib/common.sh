@@ -25,6 +25,9 @@ ODOH_RELAYS_CACHE="/etc/dnscrypt-proxy/odoh-relays.md"
 RESOLV_CONF="/etc/resolv.conf"
 DNSCRYPT_SERVICE="dnscrypt-proxy"
 
+# Константа для пользователя DNSCrypt
+DNSCRYPT_USER=$(get_dnscrypt_user)
+
 # Инициализация системы
 init_system() {
     mkdir -p "$BACKUP_DIR"
@@ -75,6 +78,27 @@ check_root() {
         log "ERROR" "Этот скрипт должен быть запущен с правами root"
         exit 1
     fi
+}
+
+# Определение пользователя DNSCrypt
+get_dnscrypt_user() {
+    # Попытка определить пользователя из службы
+    local user=$(systemctl show -p User "$DNSCRYPT_SERVICE" 2>/dev/null | sed 's/User=//')
+    
+    # Если не удалось определить через systemctl, пробуем стандартные варианты
+    if [ -z "$user" ] || [ "$user" == "=" ]; then
+        if id _dnscrypt-proxy &>/dev/null; then
+            user="_dnscrypt-proxy"
+        elif id dnscrypt-proxy &>/dev/null; then
+            user="dnscrypt-proxy"
+        else
+            # Если не удалось определить, используем текущего пользователя
+            user=$(whoami)
+            log "WARN" "Не удалось определить пользователя DNSCrypt. Используется: $user"
+        fi
+    fi
+    
+    echo "$user"
 }
 
 # Проверка зависимостей

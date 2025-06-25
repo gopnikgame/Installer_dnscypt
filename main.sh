@@ -122,6 +122,7 @@ update_libraries() {
     local libs=("common.sh" "anonymized_dns.sh" "diagnostic.sh")
     local updated_libs=0
     local errors_libs=0
+    local critical_error=false
     
     for lib in "${libs[@]}"; do
         lib_file="${lib_dir}/${lib}"
@@ -133,6 +134,11 @@ update_libraries() {
             if ! wget -q --tries=3 --timeout=10 -O "${lib_file}.tmp" "$github_url"; then
                 log "ERROR" "Ошибка загрузки библиотеки ${lib}"
                 ((errors_libs++))
+                
+                # common.sh критически важна
+                if [[ "$lib" == "common.sh" ]]; then
+                    critical_error=true
+                fi
                 continue
             fi
             
@@ -142,6 +148,11 @@ update_libraries() {
                 # Создаем заглушку для библиотеки
                 echo "#!/bin/bash" > "${lib_file}.tmp"
                 echo "# ${lib} - Пустая библиотека, будет обновлена позже" >> "${lib_file}.tmp"
+                
+                # common.sh критически важна
+                if [[ "$lib" == "common.sh" ]]; then
+                    critical_error=true
+                fi
             fi
             
             mv "${lib_file}.tmp" "$lib_file"
@@ -157,6 +168,14 @@ update_libraries() {
     if [[ $errors_libs -gt 0 ]]; then
         log "WARN" "Ошибок при обновлении библиотек: ${errors_libs}"
     fi
+    
+    # Если есть критическая ошибка, прерываем выполнение
+    if [[ "$critical_error" == "true" ]]; then
+        log "ERROR" "Критическая ошибка при загрузке обязательных библиотек"
+        return 1
+    fi
+    
+    return 0
 }
 
 # Запуск модуля
@@ -263,6 +282,18 @@ check_system() {
     check_dependencies wget curl grep sed awk
     mkdir -p "$MODULES_DIR"
     mkdir -p "$CONFIG_DIR"
+    
+    # Проверка совместимости между модулями и библиотеками
+    if [[ -f "${SCRIPT_DIR}/lib/common.sh" ]]; then
+        # Проверка версии библиотеки common.sh
+        local lib_version=$(grep "LIB_VERSION=" "${SCRIPT_DIR}/lib/common.sh" | cut -d'"' -f2)
+        if [[ -n "$lib_version" && "$lib_version" < "1.0.0" ]]; then
+            log "WARN" "Библиотека common.sh устарела (версия $lib_version). Рекомендуется обновление."
+        fi
+    else
+        log "ERROR" "Критическая библиотека common.sh отсутствует!"
+        return 1
+    fi
 }
 
 # Основная функция

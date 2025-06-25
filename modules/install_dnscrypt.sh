@@ -4,6 +4,12 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
+# Подключение диагностической библиотеки
+source "${SCRIPT_DIR}/lib/diagnostic.sh" 2>/dev/null || {
+    log "WARN" "Библиотека diagnostic.sh не найдена. Некоторые функции будут недоступны."
+    log "INFO" "Продолжение установки с ограниченной функциональностью..."
+}
+
 # Description:
 # Полная установка DNSCrypt-proxy с автоматической настройкой для различных дистрибутивов Linux.
 # Поддерживает Debian, Ubuntu, CentOS, Fedora и другие системы на базе systemd.
@@ -94,7 +100,9 @@ configure_dnscrypt() {
     mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     
     # Установка прав
-    chown -R "${DNSCRYPT_USER}:${DNSCRYPT_USER}" "$CONFIG_DIR"
+    chown -R "${DNSCRYPT_USER}:${DNSCRYPT_USER}" "$CONFIG_DIR" 2>/dev/null || {
+        log "WARN" "Не удалось изменить права доступа для $CONFIG_DIR"
+    }
     chmod 750 "$CONFIG_DIR"
     
     log "SUCCESS" "Конфигурация успешно настроена"
@@ -103,8 +111,11 @@ configure_dnscrypt() {
 
 # Настройка systemd-resolved
 configure_resolved() {
-    if ! command -v resolvectl >/dev/null 2>&1; then
-        log "INFO" "systemd-resolved не обнаружен, пропускаем настройку"
+    log "INFO" "Проверка и настройка systemd-resolved"
+    
+    # Проверка наличия systemd-resolved
+    if ! systemctl is-enabled systemd-resolved &>/dev/null; then
+        log "INFO" "systemd-resolved не установлен или отключен, пропускаем настройку"
         return 0
     fi
     
@@ -117,10 +128,20 @@ DNS=127.0.0.1
 DNSStubListener=no
 EOF
     
-    # Перезапуск службы
-    if ! systemctl restart systemd-resolved; then
-        log "WARN" "Не удалось перезапустить systemd-resolved"
-        return 1
+    # Проверяем, использует ли systemd-resolved порт 53
+    if lsof -i :53 | grep -q systemd-resolved; then
+        log "WARN" "systemd-resolved занимает порт 53, отключаем службу"
+        systemctl stop systemd-resolved
+        systemctl disable systemd-resolved
+        log "INFO" "systemd-resolved остановлен и отключен"
+    else
+        # Перезапуск службы
+        if systemctl is-active --quiet systemd-resolved; then
+            if ! systemctl restart systemd-resolved; then
+                log "WARN" "Не удалось перезапустить systemd-resolved"
+                return 1
+            fi
+        fi
     fi
     
     log "SUCCESS" "systemd-resolved успешно настроен"
@@ -137,7 +158,7 @@ configure_resolv() {
     fi
     
     # Снимаем защиту от изменений
-    chattr -i /etc/resolv.conf 2>/dev/null
+    chattr -i /etc/resolv.conf 2>/dev/null || log "INFO" "Атрибут immutable не установлен на resolv.conf"
     
     # Создаем новый resolv.conf
     cat > /etc/resolv.conf << EOF
@@ -147,32 +168,59 @@ options edns0
 EOF
     
     # Защищаем от изменений
-    chattr +i /etc/resolv.conf 2>/dev/null
+    chattr +i /etc/resolv.conf 2>/dev/null || log "WARN" "Не удалось установить атрибут immutable на resolv.conf"
     
     log "SUCCESS" "resolv.conf успешно настроен"
     return 0
 }
 
-# Проверка работы
-test_installation() {
-    log "INFO" "Проверка работы DNSCrypt"
+# Проверка доступности нужных портов
+check_required_ports() {
+    log "INFO" "Проверка доступности порта 53"
     
-    # Даем время для запуска
-    sleep 2
-    
-    # Проверка службы
-    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
-        log "ERROR" "Служба DNSCrypt не запущена"
-        return 1
+    # Используем функцию из библиотеки
+    if ! check_port_usage 53; then
+        log "WARN" "Порт 53 занят другим процессом. Попробуем освободить его"
+        
+        # Пытаемся определить и остановить процесс
+        local process=$(lsof -i :53 | grep -v "^COMMAND" | head -1 | awk '{print $1}')
+        if [ -n "$process" ]; then
+            log "INFO" "Порт 53 занят процессом $process. Пытаемся остановить"
+            
+            case "$process" in
+                systemd-resolved)
+                    systemctl stop systemd-resolved
+                    systemctl disable systemd-resolved
+                    log "INFO" "systemd-resolved остановлен и отключен"
+                    ;;
+                named|bind)
+                    systemctl stop named bind9
+                    systemctl disable named bind9
+                    log "INFO" "named/bind остановлен и отключен"
+                    ;;
+                dnsmasq)
+                    systemctl stop dnsmasq
+                    systemctl disable dnsmasq
+                    log "INFO" "dnsmasq остановлен и отключен"
+                    ;;
+                *)
+                    log "WARN" "Неизвестный процесс $process занимает порт 53. Попробуйте остановить его вручную"
+                    return 1
+                    ;;
+            esac
+            
+            # Проверяем, освободился ли порт после остановки процесса
+            sleep 2
+            if ! check_port_usage 53; then
+                log "ERROR" "Не удалось освободить порт 53. Установка может завершиться некорректно"
+                return 1
+            fi
+        else
+            log "ERROR" "Не удалось определить процесс, занимающий порт 53"
+            return 1
+        fi
     fi
     
-    # Проверка резолвинга
-    if ! dig @127.0.0.1 google.com +short +timeout=5 >/dev/null 2>&1; then
-        log "ERROR" "DNSCrypt не отвечает на DNS-запросы"
-        return 1
-    fi
-    
-    log "SUCCESS" "DNSCrypt успешно установлен и работает"
     return 0
 }
 
@@ -180,8 +228,29 @@ test_installation() {
 install_dnscrypt() {
     print_header "УСТАНОВКА DNSCRYPT-PROXY"
     
+    # Проверка подключения к интернету
+    if ! check_internet; then
+        log "ERROR" "Отсутствует подключение к интернету. Необходимо для загрузки пакетов и конфигурации"
+        return 1
+    fi
+    
+    # Проверка зависимостей
+    log "INFO" "Проверка необходимых зависимостей"
+    check_dependencies wget curl lsof sed systemctl
+    
     # Определяем дистрибутив
+    local distro
     distro=$(detect_distro) || return 1
+    
+    # Проверка доступности портов перед установкой
+    check_required_ports || {
+        log "WARN" "Проблемы с доступностью порта 53. Продолжение может привести к ошибкам"
+        read -p "Продолжить установку несмотря на проблемы с портом? (y/n): " continue_install
+        if [[ "${continue_install,,}" != "y" ]]; then
+            log "INFO" "Установка прервана пользователем"
+            return 1
+        fi
+    }
     
     # Установка пакета
     case "$distro" in
@@ -198,21 +267,74 @@ install_dnscrypt() {
     configure_resolv
     
     # Включение и запуск службы
-    systemctl enable "$SERVICE_NAME"
+    log "INFO" "Настройка автозапуска и запуск службы DNSCrypt"
+    systemctl enable "$SERVICE_NAME" || log "WARN" "Не удалось включить автозапуск службы"
+    
     if ! restart_service "$SERVICE_NAME"; then
+        log "ERROR" "Не удалось запустить службу DNSCrypt"
+        
+        # Выводим информацию о возможных причинах ошибки
+        log "INFO" "Проверка возможных причин проблем запуска службы:"
+        
+        # Проверка занятости порта 53
+        check_port_usage 53
+        
+        # Проверка конфигурации
+        if [ -f "$CONFIG_FILE" ]; then
+            cd "$(dirname "$CONFIG_FILE")" && dnscrypt-proxy -check -config="$CONFIG_FILE" && \
+                log "INFO" "Конфигурация корректна" || \
+                log "ERROR" "Ошибка в файле конфигурации"
+        fi
+        
+        # Проверка логов службы
+        log "INFO" "Последние записи журнала службы:"
+        journalctl -u "$SERVICE_NAME" -n 10 --no-pager
+        
         return 1
     fi
     
-    # Проверка работы
-    test_installation || return 1
+    # Проверка работы с использованием verify_settings из common.sh
+    log "INFO" "Проверка правильности работы DNSCrypt..."
+    sleep 2 # Даем время на инициализацию
+    
+    if verify_settings ""; then
+        log "SUCCESS" "DNSCrypt успешно установлен и работает!"
+    else
+        log "WARN" "DNSCrypt установлен, но есть проблемы с работой службы"
+        
+        # Запускаем расширенную диагностику, если доступна функция
+        if type diagnose_dns_issues &>/dev/null; then
+            log "INFO" "Запуск расширенной диагностики..."
+            diagnose_dns_issues
+        fi
+        
+        return 1
+    }
+    
+    # Информация о текущих настройках
+    print_header "ИНФОРМАЦИЯ ОБ УСТАНОВКЕ"
+    check_current_settings
     
     # Финал
-    echo -e "\n${GREEN}Установка завершена успешно!${NC}"
+    print_header "УСТАНОВКА ЗАВЕРШЕНА"
+    echo -e "\n${GREEN}Установка DNSCrypt-proxy завершена успешно!${NC}"
     echo -e "Для проверки выполните: ${YELLOW}dig @127.0.0.1 google.com${NC}"
-    echo -e "Для изменения настроек используйте DNSCrypt Manager"
+    echo -e "Для управления и дополнительной настройки используйте DNSCrypt Manager\n"
+
+    # Проверка наличия потенциальных проблем
+    if systemctl is-active --quiet systemd-resolved; then
+        echo -e "${YELLOW}ВНИМАНИЕ:${NC} systemd-resolved всё еще активен, что может вызвать конфликты"
+        echo -e "Рекомендуется выполнить: ${CYAN}sudo systemctl disable --now systemd-resolved${NC}\n"
+    fi
+
+    echo -e "После установки рекомендуется перезагрузить систему:"
+    echo -e "${CYAN}sudo reboot${NC}\n"
     
     return 0
 }
+
+# Проверка root-прав (импортируется из common.sh)
+check_root
 
 # Вызов главной функции
 if ! install_dnscrypt; then

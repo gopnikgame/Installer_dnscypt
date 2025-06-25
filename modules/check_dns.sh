@@ -1,9 +1,12 @@
 #!/bin/bash
-# modules/check_dns.sh
+# modules/check_dns.sh - Модуль для проверки и исправления конфигурации DNS
+# Создано: 2025-06-24
+# Автор: gopnikgame
 
-# Подгрузка общих функций
+# Подгрузка общих функций и диагностической библиотеки
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/diagnostic.sh"
 
 # Константы
 RESOLV_CONF="/etc/resolv.conf"
@@ -13,27 +16,8 @@ RESOLVED_CONF="/etc/systemd/resolved.conf.d/dnscrypt.conf"
 check_current_dns() {
     log "INFO" "=== Проверка текущего DNS сервера ==="
     
-    # Проверка resolv.conf
-    log "INFO" "Проверка /etc/resolv.conf:"
-    if [ -f "/etc/resolv.conf" ]; then
-        echo -e "${YELLOW}Текущие DNS серверы:${NC}"
-        grep "nameserver" /etc/resolv.conf | sed 's/^/  /'
-        
-        # Проверка симлинка
-        if [ -L "/etc/resolv.conf" ]; then
-            echo -e "\nresolf.conf является симлинком на:"
-            ls -l /etc/resolv.conf | sed 's/^/  /'
-        fi
-    else
-        log "WARN" "Файл /etc/resolv.conf не найден"
-    fi
-    
-    # Проверка systemd-resolved
-    if command -v resolvectl >/dev/null 2>&1; then
-        echo ""
-        log "INFO" "Статус systemd-resolved:"
-        resolvectl status | grep -E "DNS Server|Current DNS|DNSOverTLS|DNSSEC" | sed 's/^/  /'
-    fi
+    # Проверка системного резолвера (используем функцию из diagnostic.sh)
+    check_system_resolver
     
     # Проверка DNSCrypt
     if [ -f "$DNSCRYPT_CONFIG" ]; then
@@ -242,7 +226,7 @@ EOF
         
         # Проверяем порты
         echo -e "${YELLOW}Проверка прослушиваемых портов:${NC}"
-        ss -tulpn | grep ':53' || echo "  ${RED}Не найдены процессы, слушающие порт 53${NC}"
+        check_port_usage 53
         
         # Проверяем логи на ошибки
         echo -e "${YELLOW}Последние ошибки в логах DNSCrypt:${NC}"
@@ -377,30 +361,8 @@ get_dns_protocol_info() {
         echo -e "  ${RED}Не найдены включенные DNS протоколы${NC}"
     fi
     
-    # Проверка шифрования с помощью dig
-    echo -e "\n${YELLOW}Проверка шифрования DNS запросов:${NC}"
-    local dns_works=0
-    
-    if dig +short @127.0.0.1 cloudflare.com > /dev/null 2>&1; then
-        dns_works=1
-        # Проверка DNSSec
-        local dnssec_enabled=$(grep "^[^#]*require_dnssec = true" "$DNSCRYPT_CONFIG" | wc -l)
-        
-        if [ "$dnssec_enabled" -gt 0 ]; then
-            echo -e "  ${GREEN}✓${NC} DNSSEC ${GREEN}включен${NC} для проверки подписей DNS"
-        else
-            echo -e "  ${YELLOW}⚠${NC} DNSSEC ${YELLOW}отключен${NC} (рекомендуется включить)"
-        fi
-        
-        # Проверка шифрования
-        if [ ${#used_protocols[@]} -gt 0 ]; then
-            echo -e "  ${GREEN}✓${NC} DNS-запросы ${GREEN}шифруются${NC} (${used_protocols[*]})"
-        else
-            echo -e "  ${RED}✗${NC} DNS-запросы ${RED}не шифруются${NC} или протокол не определен"
-        fi
-    else
-        echo -e "  ${RED}✗${NC} Не удалось выполнить тестовый DNS-запрос"
-    fi
+    # Выполняем проверку безопасности DNS из библиотеки diagnostic.sh
+    check_dns_security
 }
 
 # Главная функция
@@ -408,6 +370,13 @@ main() {
     # Проверка подключения к интернету
     if ! check_internet; then
         log "ERROR" "Отсутствует подключение к интернету. Проверьте соединение и попробуйте снова."
+        return 1
+    fi
+
+    # Проверка установки DNSCrypt
+    if ! check_dnscrypt_installed; then
+        log "ERROR" "DNSCrypt-proxy не установлен. Установите его перед использованием этого модуля."
+        echo -e "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
         return 1
     fi
 

@@ -50,6 +50,7 @@ source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
 # Константы
 INSTALL_VERSION="1.2.0"
 MAIN_SCRIPT_URL="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/main.sh"
+SCRIPT_DIR="/usr/local/dnscrypt-scripts"  # Единый путь установки
 MODULES_DIR="${SCRIPT_DIR}/modules"
 LIB_DIR="${SCRIPT_DIR}/lib"
 LOG_DIR="/var/log/dnscrypt"
@@ -117,13 +118,14 @@ download_main_script() {
     print_header "УСТАНОВКА DNSCRYPT MANAGER"
     print_step "Загрузка основного скрипта..."
     
-    if wget -q --tries=3 --timeout=15 -O "/usr/local/bin/dnscrypt_manager" "$MAIN_SCRIPT_URL"; then
-        chmod +x "/usr/local/bin/dnscrypt_manager"
+    if wget -q --tries=3 --timeout=15 -O "${SCRIPT_DIR}/main.sh" "$MAIN_SCRIPT_URL"; then
+        chmod +x "${SCRIPT_DIR}/main.sh"
         log "SUCCESS" "Основной скрипт успешно установлен"
         
         # Создание символической ссылки
-        ln -sf "/usr/local/bin/dnscrypt_manager" "/usr/local/bin/dnscrypt-manager"
-        log "SUCCESS" "Символическая ссылка создана"
+        ln -sf "${SCRIPT_DIR}/main.sh" "/usr/local/bin/dnscrypt_manager"
+        ln -sf "${SCRIPT_DIR}/main.sh" "/usr/local/bin/dnscrypt-manager"
+        log "SUCCESS" "Основной скрипт успешно установлен"
         
         return 0
     else
