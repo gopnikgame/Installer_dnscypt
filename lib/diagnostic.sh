@@ -108,20 +108,29 @@ test_dns_speed() {
 check_system_resolver() {
     log "INFO" "Проверка системного резолвера..."
     
-    echo -e "\n${BLUE}Текущий системный резолвер:${NC}"
-    cat /etc/resolv.conf | grep -v "^#"
+    echo -e "\nТекущий системный резолвер:"
+    cat "$RESOLV_CONF"
     
-    # Проверка systemd-resolved
+    # Проверка статуса systemd-resolved
     if systemctl is-active --quiet systemd-resolved; then
-        echo -e "\n${YELLOW}systemd-resolved активен${NC}"
-        systemd-resolve --status
+        echo -e "\nsystemd-resolved активен"
+        
+        # Проверка наличия команды systemd-resolve
+        if command -v systemd-resolve &>/dev/null; then
+            systemd-resolve --status
+        elif command -v resolvectl &>/dev/null; then
+            # В некоторых системах команда называется resolvectl
+            resolvectl status
+        else
+            echo -e "${YELLOW}Команда systemd-resolve не найдена, но служба systemd-resolved активна${NC}"
+            echo -e "Статус DNS можно проверить с помощью: ${GREEN}sudo systemctl status systemd-resolved${NC}"
+        fi
+    else
+        echo -e "\nsystemd-resolved ${RED}неактивен${NC}"
     fi
     
-    # Проверка, куда указывает резолвер
-    echo -e "\n${BLUE}Проверка работающего DNS-сервера:${NC}"
+    echo -e "\nПроверка работающего DNS-сервера:"
     dig +short resolver.dnscrypt.info TXT
-    
-    return 0
 }
 
 # Проверка состояния DNSCrypt
