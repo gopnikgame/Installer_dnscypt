@@ -3,7 +3,7 @@
 # Version: 1.2.0
 # Author: gopnikgame
 # Created: 2025-06-22
-# Last Modified: 2025-06-24
+# Last Modified: 2025-06-25
 
 # Подгрузка общих функций
 SCRIPT_DIR="/usr/local/dnscrypt-scripts"
@@ -113,6 +113,40 @@ download_libraries() {
     fi
 }
 
+# Создание символических ссылок на библиотеки
+create_symlinks() {
+    print_step "Создание символических ссылок..."
+    
+    # Создаем директорию lib в /usr/local/bin, если она не существует
+    mkdir -p /usr/local/bin/lib
+    
+    # Создаем символические ссылки для всех библиотек
+    for lib_file in "${LIB_DIR}"/*.sh; do
+        local lib_name=$(basename "$lib_file")
+        ln -sf "$lib_file" "/usr/local/bin/lib/$lib_name"
+    done
+    
+    log "SUCCESS" "Символические ссылки успешно созданы"
+    return 0
+}
+
+# Патчинг пути к библиотекам в основном скрипте
+patch_main_script() {
+    print_step "Корректировка путей в основном скрипте..."
+    
+    # Проверяем, что файл существует
+    if [ ! -f "${SCRIPT_DIR}/main.sh" ]; then
+        log "ERROR" "Основной скрипт не найден"
+        return 1
+    fi
+    
+    # Добавляем строку для загрузки общей библиотеки с абсолютными путями
+    sed -i '5i# Добавляем абсолютный путь к библиотекам\nif [ ! -f "${SCRIPT_DIR}/lib/common.sh" ]; then\n  SCRIPT_DIR="/usr/local/dnscrypt-scripts"\nfi' "${SCRIPT_DIR}/main.sh"
+    
+    log "SUCCESS" "Пути в основном скрипте скорректированы"
+    return 0
+}
+
 # Загрузка главного скрипта
 download_main_script() {
     print_header "УСТАНОВКА DNSCRYPT MANAGER"
@@ -120,7 +154,9 @@ download_main_script() {
     
     if wget -q --tries=3 --timeout=15 -O "${SCRIPT_DIR}/main.sh" "$MAIN_SCRIPT_URL"; then
         chmod +x "${SCRIPT_DIR}/main.sh"
-        log "SUCCESS" "Основной скрипт успешно установлен"
+        
+        # Патчим пути в основном скрипте
+        patch_main_script
         
         # Создание символической ссылки
         ln -sf "${SCRIPT_DIR}/main.sh" "/usr/local/bin/dnscrypt_manager"
@@ -155,6 +191,9 @@ main() {
     # Загрузка библиотек перед скриптом
     if download_libraries; then
         log "SUCCESS" "Библиотеки успешно загружены"
+        
+        # Создание символических ссылок для библиотек
+        create_symlinks
     else
         log "WARN" "Некоторые библиотеки могут быть не загружены"
     fi
@@ -162,15 +201,21 @@ main() {
     if download_main_script; then
         show_completion
         
-        print_step "Автоматический запуск DNSCrypt Manager..."
-        echo -e "Для выхода из менеджера используйте опцию '${RED}0) Выход${NC}'"
+        print_step "Перезагрузка системы для применения изменений..."
+        echo -e "${YELLOW}Для корректной работы рекомендуется перезагрузить систему${NC}"
+        echo -e "После перезагрузки запустите: ${GREEN}sudo dnscrypt_manager${NC}"
         echo
         
-        # Небольшая задержка перед запуском
-        sleep 1
-        
-        # Запуск основного скрипта
-        /usr/local/bin/dnscrypt_manager
+        # Предлагаем перезагрузку
+        read -p "Перезагрузить систему сейчас? (y/N): " reboot_choice
+        if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Система будет перезагружена...${NC}"
+            sleep 2
+            reboot
+        else
+            echo -e "${YELLOW}Помните, что для корректной работы может потребоваться перезагрузка.${NC}"
+            echo -e "Чтобы запустить DNSCrypt Manager после установки, выполните: ${GREEN}sudo dnscrypt_manager${NC}"
+        fi
     else
         log "ERROR" "Установка не завершена из-за ошибок"
         exit 1
