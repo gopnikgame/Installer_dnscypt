@@ -25,6 +25,27 @@ ODOH_RELAYS_CACHE="/etc/dnscrypt-proxy/odoh-relays.md"
 RESOLV_CONF="/etc/resolv.conf"
 DNSCRYPT_SERVICE="dnscrypt-proxy"
 
+# Определение пользователя DNSCrypt - ФУНКЦИЯ ПЕРЕНЕСЕНА СЮДА
+get_dnscrypt_user() {
+    # Попытка определить пользователя из службы
+    local user=$(systemctl show -p User "$DNSCRYPT_SERVICE" 2>/dev/null | sed 's/User=//')
+    
+    # Если не удалось определить через systemctl, пробуем стандартные варианты
+    if [ -z "$user" ] || [ "$user" == "=" ]; then
+        if id _dnscrypt-proxy &>/dev/null; then
+            user="_dnscrypt-proxy"
+        elif id dnscrypt-proxy &>/dev/null; then
+            user="dnscrypt-proxy"
+        else
+            # Если не удалось определить, используем текущего пользователя
+            user=$(whoami)
+            # Логирование отключено, чтобы избежать ошибок на этом этапе
+        fi
+    fi
+    
+    echo "$user"
+}
+
 # Константа для пользователя DNSCrypt
 DNSCRYPT_USER=$(get_dnscrypt_user)
 
@@ -69,7 +90,10 @@ log() {
     echo -e "${color}[${timestamp}] [$level] ${message}${NC}"
     
     # Запись в лог-файл (без цветовых кодов)
-    echo "[${timestamp}] [$level] ${message}" >> "${LOG_DIR}/dnscrypt-manager.log"
+    # Проверяем существование директории логов
+    if [ -d "${LOG_DIR}" ]; then
+        echo "[${timestamp}] [$level] ${message}" >> "${LOG_DIR}/dnscrypt-manager.log"
+    fi
 }
 
 # Проверка root-прав
@@ -78,27 +102,6 @@ check_root() {
         log "ERROR" "Этот скрипт должен быть запущен с правами root"
         exit 1
     fi
-}
-
-# Определение пользователя DNSCrypt
-get_dnscrypt_user() {
-    # Попытка определить пользователя из службы
-    local user=$(systemctl show -p User "$DNSCRYPT_SERVICE" 2>/dev/null | sed 's/User=//')
-    
-    # Если не удалось определить через systemctl, пробуем стандартные варианты
-    if [ -z "$user" ] || [ "$user" == "=" ]; then
-        if id _dnscrypt-proxy &>/dev/null; then
-            user="_dnscrypt-proxy"
-        elif id dnscrypt-proxy &>/dev/null; then
-            user="dnscrypt-proxy"
-        else
-            # Если не удалось определить, используем текущего пользователя
-            user=$(whoami)
-            log "WARN" "Не удалось определить пользователя DNSCrypt. Используется: $user"
-        fi
-    fi
-    
-    echo "$user"
 }
 
 # Проверка зависимостей
