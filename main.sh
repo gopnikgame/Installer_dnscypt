@@ -26,6 +26,7 @@ declare -a MODULE_ORDER=(
     "manage_anonymized_dns.sh"
     "clear_cache.sh"
     "restore.sh"
+    "autoremove.sh"
 )
 
 declare -A MODULES=(
@@ -37,6 +38,7 @@ declare -A MODULES=(
     ["manage_anonymized_dns.sh"]="Управление анонимным DNS"
     ["clear_cache.sh"]="Очистка кэша"
     ["restore.sh"]="Восстановление из резервной копии"
+    ["autoremove.sh"]="Полное удаление DNSCrypt"
 )
 
 declare -A MODULE_DESCRIPTIONS=(
@@ -48,6 +50,7 @@ declare -A MODULE_DESCRIPTIONS=(
     ["manage_anonymized_dns.sh"]="Настройка и управление анонимизацией DNS (DNSCrypt и ODoH)"
     ["clear_cache.sh"]="Очистка кэша DNS и DNSCrypt"
     ["restore.sh"]="Восстановление предыдущих конфигураций"
+    ["autoremove.sh"]="Полное удаление DNSCrypt, восстановление стандартных настроек DNS и очистка системы"
 )
 
 # Основные функции
@@ -192,6 +195,18 @@ run_module() {
     echo -e "${BLUE}Описание:${NC} ${MODULE_DESCRIPTIONS[$module_name]}"
     echo
     
+    # Дополнительное предупреждение для модуля удаления
+    if [[ "$module_name" == "autoremove.sh" ]]; then
+        echo -e "${RED}ВАЖНО: Данный модуль полностью удалит DNSCrypt и все связанные с ним файлы!${NC}"
+        echo -e "${RED}Будут восстановлены стандартные настройки DNS, и удалены все конфигурации DNSCrypt.${NC}"
+        echo
+        read -p "Вы действительно хотите продолжить? (y/n): " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            log "INFO" "Операция отменена пользователем"
+            return 0
+        fi
+    fi
+    
     # Запуск модуля
     if ! bash "$module_path"; then
         log "ERROR" "Модуль ${module_name} завершился с ошибкой"
@@ -226,7 +241,12 @@ show_menu() {
         
         local i=1
         for module in "${MODULE_ORDER[@]}"; do
-            echo -e "$i) ${GREEN}${MODULES[$module]}${NC}"
+            # Выделяем модуль удаления красным цветом
+            if [[ "$module" == "autoremove.sh" ]]; then
+                echo -e "$i) ${RED}${MODULES[$module]}${NC}"
+            else
+                echo -e "$i) ${GREEN}${MODULES[$module]}${NC}"
+            fi
             ((i++))
         done
         
