@@ -1,0 +1,124 @@
+AUSTRIA
+Vienna
+anon-cs-austria      Anonymized DNS relay | DNSCrypt
+
+BELGIUM
+Brussels
+anon-cs-belgium      Anonymized DNS relay | DNSCrypt
+
+BRAZIL
+Sao Paulo
+anon-cs-brazil       Anonymized DNS relay | DNSCrypt
+
+CANADA
+Montreal
+anon-cs-montreal     Anonymized DNS relay | DNSCrypt
+Vancouver
+anon-cs-vancouver    Anonymized DNS relay | DNSCrypt
+
+CZECH REPUBLIC
+Prague
+anon-cs-czech        Anonymized DNS relay | DNSCrypt
+
+FINLAND
+anon-cs-finland      Anonymized DNS relay | DNSCrypt
+
+FRANCE
+anon-cs-fr           Anonymized DNS relay | DNSCrypt
+anon-kama            Anonymized DNS relay | DNSCrypt
+anon-scaleway        Anonymized DNS relay | DNSCrypt
+anon-scaleway2       Anonymized DNS relay | DNSCrypt
+
+GERMANY
+Berlin
+anon-cs-berlin       Anonymized DNS relay | DNSCrypt
+Dusseldorf
+anon-cs-dus          Anonymized DNS relay | DNSCrypt
+Frankfurt
+anon-cs-de           Anonymized DNS relay | DNSCrypt
+Nuremberg
+anon-digitalprivacy.diy-ipv4  Anonymized DNS relay | DNSCrypt
+
+HUNGARY
+Budapest
+anon-cs-hungary      Anonymized DNS relay | DNSCrypt
+ITALY
+Milan
+anon-cs-milan        Anonymized DNS relay | DNSCrypt
+
+JAPAN
+Tokyo
+anon-saldns01-conoha-ipv4  Anonymized DNS relay | DNSCrypt
+anon-saldns02-conoha-ipv4  Anonymized DNS relay | DNSCrypt
+anon-saldns03-conoha-ipv4  Anonymized DNS relay | DNSCrypt
+anon-cs-tokyo        Anonymized DNS relay | DNSCrypt
+
+NETHERLANDS
+Amsterdam
+anon-scaleway-ams    Anonymized DNS relay | DNSCrypt
+anon-cs-nl           Anonymized DNS relay | DNSCrypt
+
+NORWAY
+Oslo
+anon-cs-norway       Anonymized DNS relay | DNSCrypt
+
+POLAND
+Warsaw
+anon-cs-poland       Anonymized DNS relay | DNSCrypt
+
+PORTUGAL
+anon-cs-pt           Anonymized DNS relay | DNSCrypt
+ROMANIA
+anon-cs-ro           Anonymized DNS relay | DNSCrypt
+
+SERBIA
+Belgrade
+anon-cs-serbia       Anonymized DNS relay | DNSCrypt
+
+SINGAPORE
+anon-cs-singapore    Anonymized DNS relay | DNSCrypt
+anon-tiarap          Anonymized DNS relay | DNSCrypt
+
+SOUTH KOREA
+anon-cs-sk           Anonymized DNS relay | DNSCrypt
+
+SPAIN
+Barcelona
+anon-cs-barcelona    Anonymized DNS relay | DNSCrypt
+
+SWEDEN
+anon-cs-swe          Anonymized DNS relay | DNSCrypt
+
+SWITZERLAND
+anon-cs-ch           Anonymized DNS relay | DNSCrypt
+anon-dnswarden-swiss Anonymized DNS relay | DNSCrypt
+
+UK
+London
+anon-cs-london       Anonymized DNS relay | DNSCrypt
+anon-dnscrypt.uk-ipv4  Anonymized DNS relay | DNSCrypt
+Manchester
+anon-cs-manchester   Anonymized DNS relay | DNSCrypt
+
+USA
+Atlanta
+anon-cs-ga           Anonymized DNS relay | DNSCrypt
+Chicago
+anon-cs-il           Anonymized DNS relay | DNSCrypt
+Dallas
+anon-cs-tx           Anonymized DNS relay | DNSCrypt
+Las Vegas
+anon-cs-nv           Anonymized DNS relay | DNSCrypt
+Los Angeles
+anon-cs-la           Anonymized DNS relay | DNSCrypt
+Miami
+anon-cs-fl           Anonymized DNS relay | DNSCrypt
+New York
+anon-cs-nyc          Anonymized DNS relay | DNSCrypt
+Oregon
+anon-cs-ore          Anonymized DNS relay | DNSCrypt
+Seattle
+anon-cs-sea          Anonymized DNS relay | DNSCrypt
+anon-inconnu         Anonymized DNS relay | DNSCrypt
+Washington DC
+anon-cs-dc           Anonymized DNS relay | DNSCrypt
