@@ -740,13 +740,13 @@ change_dns() {
         log "ERROR" "DNSCrypt-proxy не установлен. Установите его перед настройкой."
         echo -e "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
         return 1
-    }
+    fi
 
     # Проверка существования конфигурационного файла
     if [ ! -f "$DNSCRYPT_CONFIG" ]; then
         log "ERROR" "Файл конфигурации DNSCrypt не найден"
         return 1
-    }
+    fi
 
     while true; do
         # Показать текущие настройки
