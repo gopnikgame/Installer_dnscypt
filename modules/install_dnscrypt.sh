@@ -589,7 +589,7 @@ install_dnscrypt() {
             rm -rf "${TEMP_BACKUP_DIR}"
             ROLLBACK_NEEDED=false
         fi
-    }
+    fi
     
     # Информация о текущих настройках
     print_header "ИНФОРМАЦИЯ ОБ УСТАНОВКЕ"
