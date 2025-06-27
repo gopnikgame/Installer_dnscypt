@@ -78,11 +78,33 @@ configure_dnscrypt() {
     # Перемещаем временный файл в основной
     mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     
-    # Установка прав
-    chown -R "${DNSCRYPT_USER}:${DNSCRYPT_USER}" "$CONFIG_DIR" 2>/dev/null || {
-        log "WARN" "Не удалось изменить права доступа для $CONFIG_DIR"
+    # Установка прав на директорию
+    chmod 755 "$CONFIG_DIR" || {
+        log "WARN" "Не удалось изменить права доступа для директории $CONFIG_DIR"
     }
-    chmod 750 "$CONFIG_DIR"
+    
+    # Установка прав на файл конфигурации
+    chmod 644 "$CONFIG_FILE" || {
+        log "WARN" "Не удалось изменить права доступа для файла $CONFIG_FILE"
+    }
+    
+    # Изменение владельца директории и файлов
+    if getent passwd "$DNSCRYPT_USER" >/dev/null; then
+        log "INFO" "Установка владельца $DNSCRYPT_USER для конфигурационных файлов"
+        chown -R "$DNSCRYPT_USER":"$DNSCRYPT_USER" "$CONFIG_DIR" || {
+            log "WARN" "Не удалось изменить владельца $CONFIG_DIR на $DNSCRYPT_USER"
+            log "INFO" "Пробуем альтернативный метод с использованием find..."
+            
+            # Альтернативный метод установки прав с помощью find
+            find "$CONFIG_DIR" -type f -exec chmod 644 {} \;
+            find "$CONFIG_DIR" -type d -exec chmod 755 {} \;
+            find "$CONFIG_DIR" -exec chown "$DNSCRYPT_USER":"$DNSCRYPT_USER" {} \;
+        }
+    else
+        log "WARN" "Пользователь $DNSCRYPT_USER не найден в системе"
+        log "INFO" "Установка общедоступных прав чтения для конфигурационных файлов"
+        chmod -R a+r "$CONFIG_DIR"
+    fi
     
     log "SUCCESS" "Конфигурация успешно настроена"
     return 0
@@ -110,6 +132,23 @@ EOF
     # Проверяем, использует ли systemd-resolved порт 53
     if lsof -i :53 | grep -q systemd-resolved; then
         log "WARN" "systemd-resolved занимает порт 53, отключаем службу"
+        
+        # Проверяем, настроен ли DNS-резолвинг с помощью backup_dns_server
+        if [ -n "${BACKUP_DNS_SERVER}" ]; then
+            log "INFO" "Используем резервный DNS-сервер: ${BACKUP_DNS_SERVER}"
+        else
+            log "WARN" "Резервный DNS не настроен перед отключением systemd-resolved"
+            log "INFO" "Устанавливаем временный DNS-сервер 8.8.8.8 для сохранения сетевого подключения"
+            export BACKUP_DNS_SERVER="8.8.8.8"
+            
+            chattr -i /etc/resolv.conf 2>/dev/null || true
+            cat > /etc/resolv.conf << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver 8.8.8.8
+options timeout:2 attempts:3
+EOF
+        fi
+        
         systemctl stop systemd-resolved
         systemctl disable systemd-resolved
         log "INFO" "systemd-resolved остановлен и отключен"
@@ -159,7 +198,16 @@ check_required_ports() {
     
     # Используем функцию из библиотеки
     if ! check_port_usage 53; then
-        log "WARN" "Порт 53 занят другим процессом. Попробуем освободить его"
+        log "WARN" "Порт 53 занят другим процессом. Сохраняем текущий DNS-резолвер перед изменениями"
+        
+        # Сохраняем текущие DNS-серверы для использования после установки
+        local current_dns=$(grep "nameserver" /etc/resolv.conf | grep -v "127.0.0." | head -1 | awk '{print $2}')
+        if [ -z "$current_dns" ]; then
+            # Если не нашли нелокальный DNS, используем Google DNS как резервный
+            current_dns="8.8.8.8"
+        fi
+        export BACKUP_DNS_SERVER="$current_dns"
+        log "INFO" "Сохранён резервный DNS-сервер: $BACKUP_DNS_SERVER"
         
         # Пытаемся определить и остановить процесс
         local process=$(lsof -i :53 | grep -v "^COMMAND" | head -1 | awk '{print $1}')
@@ -168,6 +216,30 @@ check_required_ports() {
             
             case "$process" in
                 systemd-resolved)
+                    # Создаём временный resolv.conf с внешним DNS перед остановкой системного резолвера
+                    log "INFO" "Настройка внешнего DNS ($BACKUP_DNS_SERVER) перед отключением systemd-resolved"
+                    chattr -i /etc/resolv.conf 2>/dev/null || true
+                    cat > /etc/resolv.conf.dnscrypt.tmp << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver $BACKUP_DNS_SERVER
+options timeout:2 attempts:3
+EOF
+                    # Сохраняем права доступа
+                    cp /etc/resolv.conf.dnscrypt.tmp /etc/resolv.conf
+                    rm /etc/resolv.conf.dnscrypt.tmp
+                    
+                    # Проверяем, что резолвинг работает с временным DNS
+                    if ! ping -c 1 -W 3 google.com >/dev/null 2>&1; then
+                        log "WARN" "Временный DNS не работает, пробуем альтернативный вариант"
+                        cat > /etc/resolv.conf << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+options timeout:2 attempts:3
+EOF
+                    fi
+                    
+                    # Теперь останавливаем systemd-resolved
                     systemctl stop systemd-resolved
                     systemctl disable systemd-resolved
                     log "INFO" "systemd-resolved остановлен и отключен"
@@ -192,6 +264,19 @@ check_required_ports() {
             sleep 2
             if ! check_port_usage 53; then
                 log "ERROR" "Не удалось освободить порт 53. Установка может завершиться некорректно"
+                return 1
+            fi
+            
+            # Проверяем, работает ли интернет после остановки системного резолвера
+            if ! ping -c 1 -W 3 google.com >/dev/null 2>&1 && ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+                log "ERROR" "Потеряно соединение с интернетом после отключения DNS-резолвера"
+                log "INFO" "Восстанавливаем предыдущие настройки DNS"
+                
+                # Восстанавливаем системный резолвер
+                systemctl enable systemd-resolved
+                systemctl start systemd-resolved
+                
+                log "ERROR" "Не удалось безопасно отключить системный DNS. Рекомендуется ручная настройка"
                 return 1
             fi
         else
