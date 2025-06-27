@@ -11,8 +11,8 @@ source "${SCRIPT_DIR}/lib/diagnostic.sh" 2>/dev/null || {
 }
 
 # Description:
-# Полная установка DNSCrypt-proxy с автоматической настройкой для различных дистрибутивов Linux.
-# Поддерживает Debian, Ubuntu, CentOS, Fedora и другие системы на базе systemd.
+# Полная установка DNSCrypt-proxy с автоматической настройкой для Debian/Ubuntu.
+# Поддерживает только системы на базе Debian и Ubuntu.
 
 # Константы
 DNSCRYPT_USER="_dnscrypt-proxy"
@@ -27,12 +27,8 @@ EXAMPLE_CONFIG_URL="https://raw.githubusercontent.com/DNSCrypt/dnscrypt-proxy/ma
 detect_distro() {
     if [[ -f /etc/debian_version ]]; then
         echo "debian"
-    elif [[ -f /etc/redhat-release ]]; then
-        echo "redhat"
-    elif [[ -f /etc/arch-release ]]; then
-        echo "arch"
     else
-        log "ERROR" "Неподдерживаемый дистрибутив Linux"
+        log "ERROR" "Неподдерживаемый дистрибутив Linux. Скрипт работает только с Debian/Ubuntu."
         return 1
     fi
 }
@@ -47,23 +43,6 @@ install_debian() {
     fi
     
     if ! apt-get install -y dnscrypt-proxy; then
-        log "ERROR" "Ошибка установки пакета dnscrypt-proxy"
-        return 1
-    fi
-    
-    return 0
-}
-
-# Установка для CentOS/RHEL/Fedora
-install_redhat() {
-    log "INFO" "Установка для CentOS/RHEL/Fedora"
-    
-    if ! yum install -y epel-release; then
-        log "ERROR" "Ошибка добавления репозитория EPEL"
-        return 1
-    fi
-    
-    if ! yum install -y dnscrypt-proxy; then
         log "ERROR" "Ошибка установки пакета dnscrypt-proxy"
         return 1
     fi
@@ -93,7 +72,7 @@ configure_dnscrypt() {
     # Базовые настройки
     log "INFO" "Применение базовых настроек"
     sed -i "s/^listen_addresses = .*/listen_addresses = ['127.0.0.1:53']/" "${CONFIG_FILE}.tmp"
-    sed -i "s/^server_names = .*/server_names = ['cloudflare', 'google']/" "${CONFIG_FILE}.tmp"
+    sed -i "s/^server_names = .*/server_names = ['adguard-dns', 'quad9-dnscrypt-ip4-filter-ecs-pri']/" "${CONFIG_FILE}.tmp"
     sed -i "s/^require_dnssec = .*/require_dnssec = true/" "${CONFIG_FILE}.tmp"
     
     # Перемещаем временный файл в основной
@@ -252,12 +231,8 @@ install_dnscrypt() {
         fi
     }
     
-    # Установка пакета
-    case "$distro" in
-        debian) install_debian ;;
-        redhat) install_redhat ;;
-        *) return 1 ;;
-    esac || return 1
+    # Установка пакета - только для Debian/Ubuntu
+    install_debian || return 1
     
     # Настройка конфигурации
     configure_dnscrypt || return 1
