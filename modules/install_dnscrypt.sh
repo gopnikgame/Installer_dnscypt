@@ -21,7 +21,78 @@ CONFIG_FILE="${CONFIG_DIR}/dnscrypt-proxy.toml"
 SERVICE_NAME="dnscrypt-proxy"
 EXAMPLE_CONFIG_URL="https://raw.githubusercontent.com/DNSCrypt/dnscrypt-proxy/master/dnscrypt-proxy/example-dnscrypt-proxy.toml"
 
-# Функции
+# Переменные для системы отката
+ROLLBACK_NEEDED=false
+ROLLBACK_ACTIONS=()  # Массив для хранения действий отката
+TEMP_BACKUP_DIR="/tmp/dnscrypt_rollback_$(date +%s)"
+
+# Функция для отката изменений
+rollback_changes() {
+    if [ "$ROLLBACK_NEEDED" = false ]; then
+        return 0
+    fi
+    
+    log "WARN" "Запуск процедуры отката изменений..."
+    
+    # Обрабатываем действия отката в обратном порядке
+    for ((i=${#ROLLBACK_ACTIONS[@]}-1; i>=0; i--)); do
+        action="${ROLLBACK_ACTIONS[$i]}"
+        log "INFO" "Выполнение действия отката: $action"
+        
+        case "$action" in
+            "restore_resolv")
+                log "INFO" "Восстановление resolv.conf из резервной копии"
+                if [ -f "${TEMP_BACKUP_DIR}/resolv.conf" ]; then
+                    chattr -i /etc/resolv.conf 2>/dev/null || true
+                    cp "${TEMP_BACKUP_DIR}/resolv.conf" /etc/resolv.conf
+                    log "SUCCESS" "resolv.conf восстановлен"
+                else
+                    log "WARN" "Резервная копия resolv.conf не найдена"
+                fi
+                ;;
+                
+            "restore_dnscrypt_config")
+                log "INFO" "Восстановление конфигурации DNSCrypt из резервной копии"
+                if [ -f "${TEMP_BACKUP_DIR}/dnscrypt-proxy.toml" ]; then
+                    cp "${TEMP_BACKUP_DIR}/dnscrypt-proxy.toml" "$CONFIG_FILE"
+                    log "SUCCESS" "Конфигурация DNSCrypt восстановлена"
+                else
+                    log "WARN" "Резервная копия конфигурации DNSCrypt не найдена"
+                fi
+                ;;
+                
+            "restore_systemd_resolved")
+                log "INFO" "Восстановление systemd-resolved"
+                systemctl enable systemd-resolved
+                systemctl start systemd-resolved
+                log "SUCCESS" "systemd-resolved восстановлен"
+                ;;
+                
+            "uninstall_package")
+                log "INFO" "Удаление пакета dnscrypt-proxy"
+                apt-get purge -y dnscrypt-proxy || log "WARN" "Не удалось удалить пакет dnscrypt-proxy"
+                ;;
+                
+            "restart_other_dns")
+                # Перезапуск других DNS-сервисов, которые были отключены
+                if [ -f "${TEMP_BACKUP_DIR}/stopped_services.txt" ]; then
+                    while read -r service; do
+                        log "INFO" "Перезапуск сервиса $service"
+                        systemctl enable "$service"
+                        systemctl start "$service"
+                    done < "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                fi
+                ;;
+        esac
+    done
+    
+    log "SUCCESS" "Процедура отката завершена"
+    
+    # Очистка временных файлов
+    rm -rf "${TEMP_BACKUP_DIR}"
+    
+    return 0
+}
 
 # Определение дистрибутива
 detect_distro() {
@@ -47,6 +118,10 @@ install_debian() {
         return 1
     fi
     
+    # Добавляем действие отката
+    ROLLBACK_NEEDED=true
+    ROLLBACK_ACTIONS+=("uninstall_package")
+    
     return 0
 }
 
@@ -59,24 +134,41 @@ configure_dnscrypt() {
     
     # Создание резервной копии, если файл уже существует
     if [[ -f "$CONFIG_FILE" ]]; then
+        # Копируем во временный каталог для возможного отката
+        mkdir -p "${TEMP_BACKUP_DIR}"
+        cp "$CONFIG_FILE" "${TEMP_BACKUP_DIR}/dnscrypt-proxy.toml"
+        ROLLBACK_ACTIONS+=("restore_dnscrypt_config")
+        
+        # Также создаем обычную резервную копию
         backup_config "$CONFIG_FILE" "dnscrypt-proxy"
     fi
     
-    # Загрузка примера конфигурации
-    log "INFO" "Загрузка примера конфигурации"
-    if ! wget -q -O "${CONFIG_FILE}.tmp" "$EXAMPLE_CONFIG_URL"; then
-        log "ERROR" "Ошибка загрузки примера конфигурации"
-        return 1
+    # Загрузка предварительно настроенного конфигурационного файла
+    log "INFO" "Загрузка предварительно настроенного конфигурационного файла"
+    
+    PRECONFIGURED_CONFIG_URL="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/dnscrypt-proxy.toml"
+    
+    if ! wget -q -O "$CONFIG_FILE" "$PRECONFIGURED_CONFIG_URL"; then
+        log "WARN" "Ошибка загрузки предварительно настроенного конфигурационного файла"
+        log "INFO" "Используем стандартный файл конфигурации"
+        
+        # Загрузка стандартного примера конфигурации в качестве запасного варианта
+        if ! wget -q -O "${CONFIG_FILE}.tmp" "$EXAMPLE_CONFIG_URL"; then
+            log "ERROR" "Ошибка загрузки примера конфигурации"
+            return 1
+        fi
+        
+        # Базовые настройки
+        log "INFO" "Применение базовых настроек"
+        sed -i "s/^listen_addresses = .*/listen_addresses = ['127.0.0.1:53']/" "${CONFIG_FILE}.tmp"
+        sed -i "s/^server_names = .*/server_names = ['adguard-dns', 'quad9-dnscrypt-ip4-filter-ecs-pri']/" "${CONFIG_FILE}.tmp"
+        sed -i "s/^require_dnssec = .*/require_dnssec = false/" "${CONFIG_FILE}.tmp"
+        
+        # Перемещаем временный файл в основной
+        mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    else
+        log "SUCCESS" "Предварительно настроенный конфигурационный файл успешно загружен"
     fi
-    
-    # Базовые настройки
-    log "INFO" "Применение базовых настроек"
-    sed -i "s/^listen_addresses = .*/listen_addresses = ['127.0.0.1:53']/" "${CONFIG_FILE}.tmp"
-    sed -i "s/^server_names = .*/server_names = ['adguard-dns', 'quad9-dnscrypt-ip4-filter-ecs-pri']/" "${CONFIG_FILE}.tmp"
-    sed -i "s/^require_dnssec = .*/require_dnssec = true/" "${CONFIG_FILE}.tmp"
-    
-    # Перемещаем временный файл в основной
-    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     
     # Установка прав на директорию
     chmod 755 "$CONFIG_DIR" || {
@@ -133,6 +225,10 @@ EOF
     if lsof -i :53 | grep -q systemd-resolved; then
         log "WARN" "systemd-resolved занимает порт 53, отключаем службу"
         
+        # Добавляем действие отката
+        ROLLBACK_NEEDED=true
+        ROLLBACK_ACTIONS+=("restore_systemd_resolved")
+        
         # Проверяем, настроен ли DNS-резолвинг с помощью backup_dns_server
         if [ -n "${BACKUP_DNS_SERVER}" ]; then
             log "INFO" "Используем резервный DNS-сервер: ${BACKUP_DNS_SERVER}"
@@ -172,6 +268,12 @@ configure_resolv() {
     
     # Создание резервной копии
     if [[ -f /etc/resolv.conf ]]; then
+        # Копируем во временный каталог для возможного отката
+        mkdir -p "${TEMP_BACKUP_DIR}"
+        cp /etc/resolv.conf "${TEMP_BACKUP_DIR}/resolv.conf"
+        ROLLBACK_ACTIONS+=("restore_resolv")
+        
+        # Также создаем обычную резервную копию
         backup_config "/etc/resolv.conf" "resolv.conf"
     fi
     
@@ -209,9 +311,16 @@ check_required_ports() {
         export BACKUP_DNS_SERVER="$current_dns"
         log "INFO" "Сохранён резервный DNS-сервер: $BACKUP_DNS_SERVER"
         
+        # Создаем файл для хранения остановленных сервисов
+        mkdir -p "${TEMP_BACKUP_DIR}"
+        
         # Проверяем наличие systemd-resolved через PID файл и службу
         if systemctl is-active --quiet systemd-resolved || pgrep -f systemd-resolved >/dev/null; then
             log "INFO" "Обнаружена активная служба systemd-resolved. Настраиваем временный DNS перед отключением"
+            
+            # Добавляем в список для отката
+            echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+            ROLLBACK_ACTIONS+=("restart_other_dns")
             
             # Создаём временный resolv.conf с внешним DNS перед остановкой системного резолвера
             chattr -i /etc/resolv.conf 2>/dev/null || true
@@ -261,6 +370,10 @@ EOF
             
             case "$process" in
                 systemd-resolved|systemd-r*)
+                    # Добавляем в список для отката
+                    echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                    ROLLBACK_ACTIONS+=("restart_other_dns")
+                    
                     # Создаём временный resolv.conf с внешним DNS перед остановкой системного резолвера
                     log "INFO" "Настройка внешнего DNS ($BACKUP_DNS_SERVER) перед отключением systemd-resolved"
                     chattr -i /etc/resolv.conf 2>/dev/null || true
@@ -287,11 +400,19 @@ EOF
                     log "INFO" "systemd-resolved остановлен и отключен"
                     ;;
                 named|bind)
+                    # Добавляем в список для отката
+                    echo "named bind9" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                    ROLLBACK_ACTIONS+=("restart_other_dns")
+                    
                     systemctl stop named bind9
                     systemctl disable named bind9
                     log "INFO" "named/bind остановлен и отключен"
                     ;;
                 dnsmasq)
+                    # Добавляем в список для отката
+                    echo "dnsmasq" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                    ROLLBACK_ACTIONS+=("restart_other_dns")
+                    
                     systemctl stop dnsmasq
                     systemctl disable dnsmasq
                     log "INFO" "dnsmasq остановлен и отключен"
@@ -300,6 +421,10 @@ EOF
                     # Последняя попытка: проверяем, является ли процесс экземпляром systemd-resolved
                     if ps -p "$process_pid" -o cmd= | grep -q "systemd-resolve"; then
                         log "INFO" "Определен процесс systemd-resolved по PID $process_pid"
+                        
+                        # Добавляем в список для отката
+                        echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                        ROLLBACK_ACTIONS+=("restart_other_dns")
                         
                         # Настраиваем временный DNS
                         chattr -i /etc/resolv.conf 2>/dev/null || true
@@ -349,6 +474,9 @@ EOF
 install_dnscrypt() {
     print_header "УСТАНОВКА DNSCRYPT-PROXY"
     
+    # Создаем директорию для временных бэкапов
+    mkdir -p "${TEMP_BACKUP_DIR}"
+    
     # Проверка подключения к интернету
     if ! check_internet; then
         log "ERROR" "Отсутствует подключение к интернету. Необходимо для загрузки пакетов и конфигурации"
@@ -374,14 +502,31 @@ install_dnscrypt() {
     }
     
     # Установка пакета - только для Debian/Ubuntu
-    install_debian || return 1
+    install_debian || {
+        log "ERROR" "Ошибка установки пакета DNSCrypt-proxy"
+        rollback_changes
+        return 1
+    }
     
     # Настройка конфигурации
-    configure_dnscrypt || return 1
+    configure_dnscrypt || {
+        log "ERROR" "Ошибка настройки конфигурации DNSCrypt"
+        rollback_changes
+        return 1
+    }
     
     # Настройка DNS
-    configure_resolved
-    configure_resolv
+    configure_resolved || {
+        log "ERROR" "Ошибка настройки systemd-resolved"
+        rollback_changes
+        return 1
+    }
+    
+    configure_resolv || {
+        log "ERROR" "Ошибка настройки resolv.conf"
+        rollback_changes
+        return 1
+    }
     
     # Включение и запуск службы
     log "INFO" "Настройка автозапуска и запуск службы DNSCrypt"
@@ -407,6 +552,10 @@ install_dnscrypt() {
         log "INFO" "Последние записи журнала службы:"
         journalctl -u "$SERVICE_NAME" -n 10 --no-pager
         
+        # Выполняем откат изменений
+        log "WARN" "Запуск процедуры отката из-за ошибки запуска службы DNSCrypt"
+        rollback_changes
+        
         return 1
     fi
     
@@ -416,6 +565,9 @@ install_dnscrypt() {
     
     if verify_settings ""; then
         log "SUCCESS" "DNSCrypt успешно установлен и работает!"
+        # Очищаем временные файлы для отката, так как установка успешна
+        rm -rf "${TEMP_BACKUP_DIR}"
+        ROLLBACK_NEEDED=false
     else
         log "WARN" "DNSCrypt установлен, но есть проблемы с работой службы"
         
@@ -425,8 +577,19 @@ install_dnscrypt() {
             diagnose_dns_issues
         fi
         
-        return 1
-    fi
+        # Спрашиваем пользователя, нужно ли откатить изменения
+        read -p "Обнаружены проблемы с работой DNSCrypt. Хотите откатить установку? (y/n): " rollback_choice
+        if [[ "${rollback_choice,,}" == "y" ]]; then
+            log "INFO" "Откат установки по запросу пользователя"
+            rollback_changes
+            return 1
+        else
+            log "WARN" "Пользователь решил продолжить несмотря на проблемы"
+            # Очищаем временные файлы для отката
+            rm -rf "${TEMP_BACKUP_DIR}"
+            ROLLBACK_NEEDED=false
+        fi
+    }
     
     # Информация о текущих настройках
     print_header "ИНФОРМАЦИЯ ОБ УСТАНОВКЕ"
@@ -449,6 +612,9 @@ install_dnscrypt() {
     
     return 0
 }
+
+# Перехват сигналов для выполнения отката при прерывании
+trap 'echo ""; log "WARN" "Установка прервана. Выполняем откат изменений..."; rollback_changes; exit 1' INT TERM
 
 # Проверка root-прав (импортируется из common.sh)
 check_root
