@@ -284,7 +284,7 @@ install_dnscrypt() {
         fi
         
         return 1
-    }
+    fi
     
     # Информация о текущих настройках
     print_header "ИНФОРМАЦИЯ ОБ УСТАНОВКЕ"
