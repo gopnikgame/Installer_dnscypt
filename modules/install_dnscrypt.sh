@@ -209,24 +209,66 @@ check_required_ports() {
         export BACKUP_DNS_SERVER="$current_dns"
         log "INFO" "Сохранён резервный DNS-сервер: $BACKUP_DNS_SERVER"
         
-        # Пытаемся определить и остановить процесс
-        local process=$(lsof -i :53 | grep -v "^COMMAND" | head -1 | awk '{print $1}')
-        if [ -n "$process" ]; then
-            log "INFO" "Порт 53 занят процессом $process. Пытаемся остановить"
+        # Проверяем наличие systemd-resolved через PID файл и службу
+        if systemctl is-active --quiet systemd-resolved || pgrep -f systemd-resolved >/dev/null; then
+            log "INFO" "Обнаружена активная служба systemd-resolved. Настраиваем временный DNS перед отключением"
             
-            case "$process" in
-                systemd-resolved)
-                    # Создаём временный resolv.conf с внешним DNS перед остановкой системного резолвера
-                    log "INFO" "Настройка внешнего DNS ($BACKUP_DNS_SERVER) перед отключением systemd-resolved"
-                    chattr -i /etc/resolv.conf 2>/dev/null || true
-                    cat > /etc/resolv.conf.dnscrypt.tmp << EOF
+            # Создаём временный resolv.conf с внешним DNS перед остановкой системного резолвера
+            chattr -i /etc/resolv.conf 2>/dev/null || true
+            cat > /etc/resolv.conf.dnscrypt.tmp << EOF
 # Temporary resolv.conf by DNSCrypt installer
 nameserver $BACKUP_DNS_SERVER
 options timeout:2 attempts:3
 EOF
-                    # Сохраняем права доступа
-                    cp /etc/resolv.conf.dnscrypt.tmp /etc/resolv.conf
-                    rm /etc/resolv.conf.dnscrypt.tmp
+            # Сохраняем права доступа
+            cp /etc/resolv.conf.dnscrypt.tmp /etc/resolv.conf
+            rm -f /etc/resolv.conf.dnscrypt.tmp
+            
+            # Проверяем, что резолвинг работает с временным DNS
+            if ! ping -c 1 -W 3 google.com >/dev/null 2>&1; then
+                log "WARN" "Временный DNS не работает, пробуем альтернативный вариант"
+                cat > /etc/resolv.conf << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+options timeout:2 attempts:3
+EOF
+            fi
+            
+            # Теперь останавливаем systemd-resolved
+            systemctl stop systemd-resolved
+            systemctl disable systemd-resolved
+            log "INFO" "systemd-resolved остановлен и отключен"
+            
+            # Проверяем, освободился ли порт после остановки процесса
+            sleep 2
+            if ! check_port_usage 53; then
+                log "ERROR" "Не удалось освободить порт 53 после остановки systemd-resolved"
+                return 1
+            fi
+        else
+            # Пытаемся определить процесс через lsof
+            local process_info=$(lsof -i :53 | grep -v "^COMMAND" | head -1)
+            local process=$(echo "$process_info" | awk '{print $1}')
+            local process_pid=$(echo "$process_info" | awk '{print $2}')
+            
+            # Дополнительная проверка для усеченных имен процессов (например, systemd-r вместо systemd-resolved)
+            if [[ "$process" == "systemd-r"* ]]; then
+                process="systemd-resolved"
+            fi
+            
+            log "INFO" "Порт 53 занят процессом $process (PID: $process_pid). Пытаемся остановить"
+            
+            case "$process" in
+                systemd-resolved|systemd-r*)
+                    # Создаём временный resolv.conf с внешним DNS перед остановкой системного резолвера
+                    log "INFO" "Настройка внешнего DNS ($BACKUP_DNS_SERVER) перед отключением systemd-resolved"
+                    chattr -i /etc/resolv.conf 2>/dev/null || true
+                    cat > /etc/resolv.conf << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver $BACKUP_DNS_SERVER
+options timeout:2 attempts:3
+EOF
                     
                     # Проверяем, что резолвинг работает с временным DNS
                     if ! ping -c 1 -W 3 google.com >/dev/null 2>&1; then
@@ -255,8 +297,26 @@ EOF
                     log "INFO" "dnsmasq остановлен и отключен"
                     ;;
                 *)
-                    log "WARN" "Неизвестный процесс $process занимает порт 53. Попробуйте остановить его вручную"
-                    return 1
+                    # Последняя попытка: проверяем, является ли процесс экземпляром systemd-resolved
+                    if ps -p "$process_pid" -o cmd= | grep -q "systemd-resolve"; then
+                        log "INFO" "Определен процесс systemd-resolved по PID $process_pid"
+                        
+                        # Настраиваем временный DNS
+                        chattr -i /etc/resolv.conf 2>/dev/null || true
+                        cat > /etc/resolv.conf << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver $BACKUP_DNS_SERVER
+options timeout:2 attempts:3
+EOF
+                        
+                        # Останавливаем systemd-resolved
+                        systemctl stop systemd-resolved
+                        systemctl disable systemd-resolved
+                        log "INFO" "systemd-resolved остановлен и отключен"
+                    else
+                        log "WARN" "Неизвестный процесс $process занимает порт 53. Попробуйте остановить его вручную"
+                        return 1
+                    fi
                     ;;
             esac
             
@@ -266,21 +326,18 @@ EOF
                 log "ERROR" "Не удалось освободить порт 53. Установка может завершиться некорректно"
                 return 1
             fi
+        fi
+        
+        # Проверяем, работает ли интернет после остановки системного резолвера
+        if ! ping -c 1 -W 3 google.com >/dev/null 2>&1 && ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+            log "ERROR" "Потеряно соединение с интернетом после отключения DNS-резолвера"
+            log "INFO" "Восстанавливаем предыдущие настройки DNS"
             
-            # Проверяем, работает ли интернет после остановки системного резолвера
-            if ! ping -c 1 -W 3 google.com >/dev/null 2>&1 && ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-                log "ERROR" "Потеряно соединение с интернетом после отключения DNS-резолвера"
-                log "INFO" "Восстанавливаем предыдущие настройки DNS"
-                
-                # Восстанавливаем системный резолвер
-                systemctl enable systemd-resolved
-                systemctl start systemd-resolved
-                
-                log "ERROR" "Не удалось безопасно отключить системный DNS. Рекомендуется ручная настройка"
-                return 1
-            fi
-        else
-            log "ERROR" "Не удалось определить процесс, занимающий порт 53"
+            # Восстанавливаем системный резолвер
+            systemctl enable systemd-resolved
+            systemctl start systemd-resolved
+            
+            log "ERROR" "Не удалось безопасно отключить системный DNS. Рекомендуется ручная настройка"
             return 1
         fi
     fi
