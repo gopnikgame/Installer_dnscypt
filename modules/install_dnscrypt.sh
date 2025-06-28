@@ -970,7 +970,7 @@ install_dnscrypt() {
     
     # Проверка работы с использованием verify_settings из common.sh
     log "INFO" "Проверка правильности работы DNSCrypt..."
-    sleep 3 # Даем время на инициализацию
+    sleep 61 # Даем время на инициализацию
     
     if verify_settings ""; then
         log "SUCCESS" "DNSCrypt успешно установлен и работает!"
