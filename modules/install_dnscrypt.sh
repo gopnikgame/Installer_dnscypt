@@ -177,7 +177,9 @@ download_latest_release() {
     fi
     
     log "SUCCESS" "DNSCrypt-proxy успешно загружен"
-    echo "$workdir/$download_file"
+    
+    # Вместо возврата пути через echo, сохраняем в глобальной переменной
+    DOWNLOADED_ARCHIVE_PATH="$workdir/$download_file"
     return 0
 }
 
@@ -186,6 +188,12 @@ install_from_archive() {
     local archive_file="$1"
     log "INFO" "Установка DNSCrypt-proxy из архива $archive_file"
     
+    # Проверка существования архива
+    if [ ! -f "$archive_file" ]; then
+        log "ERROR" "Архив не найден: $archive_file"
+        return 1
+    fi
+    
     # Создаем директорию для установки
     mkdir -p "$INSTALL_DIR"
     
@@ -193,8 +201,17 @@ install_from_archive() {
     local extract_dir="$(mktemp -d)"
     
     # Распаковываем архив
-    if ! tar xz -C "$extract_dir" -f "$archive_file"; then
+    log "INFO" "Распаковка архива $archive_file"
+    if ! tar -xzf "$archive_file" -C "$extract_dir"; then
         log "ERROR" "Ошибка распаковки архива $archive_file"
+        rm -rf "$extract_dir"
+        return 1
+    fi
+    
+    # Проверяем содержимое архива
+    if [ ! -f "$extract_dir/${PLATFORM}-${CPU_ARCH}/dnscrypt-proxy" ]; then
+        log "ERROR" "Архив не содержит ожидаемого файла dnscrypt-proxy для $PLATFORM-$CPU_ARCH"
+        ls -la "$extract_dir" # Показываем содержимое для диагностики
         rm -rf "$extract_dir"
         return 1
     fi
@@ -211,6 +228,8 @@ install_from_archive() {
     if [ ! -f "$CONFIG_FILE" ]; then
         if [ -f "$extract_dir/${PLATFORM}-${CPU_ARCH}/example-dnscrypt-proxy.toml" ]; then
             cp "$extract_dir/${PLATFORM}-${CPU_ARCH}/example-dnscrypt-proxy.toml" "$CONFIG_FILE"
+        else
+            log "WARN" "Пример конфигурации не найден в архиве"
         fi
     fi
     
@@ -219,6 +238,12 @@ install_from_archive() {
     
     # Очистка
     rm -rf "$extract_dir"
+    
+    # Проверяем успешность установки
+    if [ ! -x "$INSTALL_DIR/dnscrypt-proxy" ]; then
+        log "ERROR" "DNSCrypt-proxy не был корректно установлен"
+        return 1
+    fi
     
     log "SUCCESS" "DNSCrypt-proxy установлен в $INSTALL_DIR"
     return 0
@@ -573,6 +598,15 @@ check_required_ports() {
     
     local port_busy=false
     
+    # Проверяем доступность команды lsof
+    if ! command -v lsof &>/dev/null; then
+        log "WARN" "Команда lsof не найдена, устанавливаем..."
+        if ! install_package "lsof"; then
+            log "ERROR" "Не удалось установить lsof, пропускаем проверку портов"
+            return 0
+        fi
+    fi
+    
     # Проверяем, занят ли порт
     if lsof -i :53 >/dev/null 2>&1; then
         port_busy=true
@@ -589,8 +623,12 @@ check_required_ports() {
         # Создаем файл для хранения остановленных сервисов
         mkdir -p "${TEMP_BACKUP_DIR}"
         
+        # Показываем процессы, использующие порт 53
+        log "INFO" "Процессы, использующие порт 53:"
+        lsof -i :53 | grep -v "^COMMAND" | tee /tmp/port53_processes.txt
+        
         # Определяем процесс, занимающий порт
-        local process_info=$(lsof -i :53 | grep -v "^COMMAND" | head -1)
+        local process_info=$(head -1 /tmp/port53_processes.txt)
         local process=$(echo "$process_info" | awk '{print $1}')
         local process_pid=$(echo "$process_info" | awk '{print $2}')
         
@@ -598,31 +636,76 @@ check_required_ports() {
         case "$process" in
             systemd-resolve*)
                 log "INFO" "Порт занят системной службой systemd-resolved"
+                echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                log "INFO" "systemd-resolved будет настроен позже в процессе установки"
                 ;;
             named|bind*)
                 log "INFO" "Порт занят сервером BIND"
                 echo "named bind9" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
                 ROLLBACK_ACTIONS+=("restart_other_dns")
-                systemctl stop named bind9 2>/dev/null
-                systemctl disable named bind9 2>/dev/null
+                
+                log "INFO" "Остановка named/bind..."
+                systemctl stop named bind9 2>/dev/null || {
+                    log "WARN" "Не удалось остановить named/bind через systemctl"
+                    if command -v service &>/dev/null; then
+                        service named stop 2>/dev/null || service bind9 stop 2>/dev/null
+                    fi
+                }
+                systemctl disable named bind9 2>/dev/null || true
                 log "INFO" "named/bind остановлен и отключен"
                 ;;
             dnsmasq)
                 log "INFO" "Порт занят DNSMasq"
                 echo "dnsmasq" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
                 ROLLBACK_ACTIONS+=("restart_other_dns")
-                systemctl stop dnsmasq
-                systemctl disable dnsmasq
+                
+                log "INFO" "Остановка dnsmasq..."
+                systemctl stop dnsmasq || {
+                    log "WARN" "Не удалось остановить dnsmasq через systemctl"
+                    if command -v service &>/dev/null; then
+                        service dnsmasq stop 2>/dev/null
+                    fi
+                }
+                systemctl disable dnsmasq || true
                 log "INFO" "dnsmasq остановлен и отключен"
+                ;;
+            unbound)
+                log "INFO" "Порт занят Unbound DNS"
+                echo "unbound" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+                ROLLBACK_ACTIONS+=("restart_other_dns")
+                
+                log "INFO" "Остановка unbound..."
+                systemctl stop unbound || {
+                    log "WARN" "Не удалось остановить unbound через systemctl"
+                    if command -v service &>/dev/null; then
+                        service unbound stop 2>/dev/null
+                    fi
+                }
+                systemctl disable unbound || true
+                log "INFO" "unbound остановлен и отключен"
                 ;;
             *)
                 log "WARN" "Неизвестный процесс $process (PID: $process_pid) занимает порт 53"
+                echo "$process (PID: $process_pid)" >> "${TEMP_BACKUP_DIR}/unknown_processes.txt"
+                
+                # Спрашиваем пользователя, хочет ли он завершить процесс
+                read -p "Хотите завершить процесс $process (PID: $process_pid), занимающий порт 53? (y/n): " kill_process
+                if [[ "${kill_process,,}" == "y" ]]; then
+                    log "INFO" "Завершение процесса $process (PID: $process_pid)..."
+                    kill -15 "$process_pid" || {
+                        log "WARN" "Не удалось корректно завершить процесс, пробуем принудительно"
+                        kill -9 "$process_pid" || log "ERROR" "Не удалось завершить процесс"
+                    }
+                fi
                 ;;
         esac
         
         # Проверяем, освободился ли порт
+        sleep 1 # Даем время на остановку процессов
         if lsof -i :53 >/dev/null 2>&1; then
             log "WARN" "Порт 53 всё ещё занят после попытки остановить службы"
+            log "INFO" "Процессы, всё ещё использующие порт 53:"
+            lsof -i :53
             return 1
         else
             log "SUCCESS" "Порт 53 освобожден"
@@ -631,7 +714,26 @@ check_required_ports() {
         log "INFO" "Порт 53 свободен"
     fi
     
+    # Очистка временных файлов
+    rm -f /tmp/port53_processes.txt
+    
     return 0
+}
+
+# Вспомогательная функция для установки пакетов
+install_package() {
+    local package="$1"
+    
+    if command -v apt-get &>/dev/null; then
+        apt-get update && apt-get install -y "$package"
+    elif command -v yum &>/dev/null; then
+        yum install -y "$package"
+    elif command -v dnf &>/dev/null; then
+        dnf install -y "$package"
+    else
+        return 1
+    fi
+    return $?
 }
 
 # Установка необходимых зависимостей
@@ -645,18 +747,77 @@ install_dependencies() {
         "tar"
         "lsof"
         "ca-certificates"
+        "dig" # Для проверки DNS
     )
     
-    # Устанавливаем minisign, если доступен
-    if apt-cache show minisign &>/dev/null; then
-        packages+=("minisign")
+    # Проверка доступности менеджера пакетов
+    local pkg_manager=""
+    if command -v apt-get &>/dev/null; then
+        pkg_manager="apt"
+        # Добавляем пакет для dig
+        packages=(${packages[@]/dig/dnsutils})
+    elif command -v yum &>/dev/null; then
+        pkg_manager="yum"
+        # Добавляем пакет для dig в RedHat/CentOS
+        packages=(${packages[@]/dig/bind-utils})
+    elif command -v dnf &>/dev/null; then
+        pkg_manager="dnf"
+        # Добавляем пакет для dig в Fedora
+        packages=(${packages[@]/dig/bind-utils})
+    else
+        log "WARN" "Неизвестный менеджер пакетов, пропускаем установку зависимостей"
+        return 1
     fi
     
-    # Установка пакетов
-    apt-get update && apt-get install -y "${packages[@]}" || {
-        log "WARN" "Не удалось установить все зависимости"
-        return 1
-    }
+    # Проверка наличия пакетов
+    local missing_packages=()
+    for pkg in "${packages[@]}"; do
+        if ! command -v "$pkg" &>/dev/null && [ "$pkg" != "dig" ]; then
+            if ! dpkg -s "$pkg" &>/dev/null 2>&1 && ! rpm -q "$pkg" &>/dev/null 2>&1; then
+                missing_packages+=("$pkg")
+            fi
+        fi
+    done
+    
+    # Установка отсутствующих пакетов
+    if [ ${#missing_packages[@]} -gt 0 ]; then
+        log "INFO" "Установка отсутствующих пакетов: ${missing_packages[*]}"
+        
+        case $pkg_manager in
+            apt)
+                apt-get update && apt-get install -y "${missing_packages[@]}" || {
+                    log "WARN" "Не удалось установить все зависимости"
+                    return 1
+                }
+                ;;
+            yum|dnf)
+                $pkg_manager install -y "${missing_packages[@]}" || {
+                    log "WARN" "Не удалось установить все зависимости"
+                    return 1
+                }
+                ;;
+        esac
+    else
+        log "INFO" "Все необходимые пакеты уже установлены"
+    fi
+    
+    # Устанавливаем minisign, если доступен
+    if [ "$pkg_manager" = "apt" ]; then
+        if apt-cache show minisign &>/dev/null; then
+            if ! command -v minisign &>/dev/null; then
+                log "INFO" "Установка minisign для проверки подписи"
+                apt-get install -y minisign || log "WARN" "Не удалось установить minisign"
+            fi
+        fi
+    elif [ "$pkg_manager" = "yum" ] || [ "$pkg_manager" = "dnf" ]; then
+        # Проверка наличия EPEL для minisign
+        if $pkg_manager list minisign &>/dev/null; then
+            if ! command -v minisign &>/dev/null; then
+                log "INFO" "Установка minisign для проверки подписи"
+                $pkg_manager install -y minisign || log "WARN" "Не удалось установить minisign"
+            fi
+        fi
+    fi
     
     log "SUCCESS" "Зависимости успешно установлены"
     return 0
@@ -703,20 +864,29 @@ install_dnscrypt() {
         return 1
     }
     
+    # Очищаем глобальную переменную перед использованием
+    DOWNLOADED_ARCHIVE_PATH=""
+    
     # Загрузка последней версии
-    local archive_file
-    archive_file=$(download_latest_release) || {
+    if ! download_latest_release; then
         log "ERROR" "Ошибка загрузки DNSCrypt-proxy"
         rollback_changes
         return 1
-    }
+    fi
+    
+    # Проверка получения пути к архиву
+    if [ -z "$DOWNLOADED_ARCHIVE_PATH" ] || [ ! -f "$DOWNLOADED_ARCHIVE_PATH" ]; then
+        log "ERROR" "Не удалось получить доступ к загруженному архиву"
+        rollback_changes
+        return 1
+    fi
     
     # Устанавливаем DNSCrypt из архива
-    install_from_archive "$archive_file" || {
+    if ! install_from_archive "$DOWNLOADED_ARCHIVE_PATH"; then
         log "ERROR" "Ошибка установки DNSCrypt-proxy из архива"
         rollback_changes
         return 1
-    }
+    fi
     
     # Добавляем действие отката
     ROLLBACK_NEEDED=true
