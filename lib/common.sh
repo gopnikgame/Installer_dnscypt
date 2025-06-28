@@ -456,8 +456,19 @@ verify_settings() {
 extended_verify_config() {
     echo -e "\n${BLUE}Расширенная проверка конфигурации DNSCrypt:${NC}"
     
+    # Определяем путь к исполняемому файлу
+    local dnscrypt_bin="/opt/dnscrypt-proxy/dnscrypt-proxy"
+    if [ ! -x "$dnscrypt_bin" ]; then
+        dnscrypt_bin=$(which dnscrypt-proxy 2>/dev/null)
+    fi
+    
+    if [ ! -x "$dnscrypt_bin" ]; then
+        log "ERROR" "Исполняемый файл DNSCrypt не найден"
+        return 1
+    fi
+    
     # Проверка конфигурации
-    if cd "$(dirname "$DNSCRYPT_CONFIG")" && dnscrypt-proxy -check; then
+    if cd "$(dirname "$DNSCRYPT_CONFIG")" && "$dnscrypt_bin" -check -config="$DNSCRYPT_CONFIG" &>/dev/null; then
         log "SUCCESS" "${GREEN}Конфигурация успешно проверена${NC}"
         
         # Проверка активных DNS-серверов
@@ -499,6 +510,8 @@ extended_verify_config() {
         
     else
         log "ERROR" "${RED}Ошибка в конфигурации${NC}"
+        echo -e "${YELLOW}Подробности ошибки:${NC}"
+        "$dnscrypt_bin" -check -config="$DNSCRYPT_CONFIG" 2>&1 | head -10
     fi
 }
 
