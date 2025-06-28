@@ -332,7 +332,7 @@ EOF
     return 0
 }
 
-# Настройка конфигурации
+# Настройка конфигурации (исправленная минимальная конфигурация)
 configure_dnscrypt() {
     log "INFO" "Настройка конфигурации DNSCrypt"
     
@@ -387,6 +387,7 @@ configure_dnscrypt() {
         "monitoring_ui"      # Мониторинг UI (добавлен в новых версиях)
         "http3_probe"        # HTTP3 параметры (могут отсутствовать в старых версиях)
         "cloak_ptr"          # PTR cloaking (может отсутствовать в старых версиях)
+        "dns64"              # DNS64 (новый параметр, может быть несовместим)
     )
     
     # Проверка и комментирование несовместимых параметров
@@ -411,6 +412,12 @@ configure_dnscrypt() {
         sed -i '/^\[monitoring_ui\]/,/^\[/s/^/#/' "${CONFIG_FILE}.tmp"
     fi
     
+    # Комментирование проблемных DNS64 настроек
+    if grep -q -E "^\[dns64\]" "${CONFIG_FILE}.tmp"; then
+        log "INFO" "Комментирование секции dns64"
+        sed -i '/^\[dns64\]/,/^\[/s/^/#/' "${CONFIG_FILE}.tmp"
+    fi
+    
     # Перемещаем временный файл в основной
     mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
     
@@ -429,7 +436,7 @@ configure_dnscrypt() {
         # Резервное копирование проблемной конфигурации
         cp "$CONFIG_FILE" "${CONFIG_FILE}.error"
         
-        # Использование минимальной конфигурации
+        # Использование минимальной конфигурации (исправленной)
         cat > "$CONFIG_FILE" << EOF
 # Минимальная конфигурация DNSCrypt-proxy, созданная автоматически
 
@@ -442,7 +449,6 @@ ipv4_servers = true
 ipv6_servers = false
 dnscrypt_servers = true
 doh_servers = true
-odoh_servers = false
 force_tcp = false
 timeout = 5000
 keepalive = 30
@@ -451,7 +457,8 @@ bootstrap_resolvers = ['9.9.9.11:53', '8.8.8.8:53']
 ignore_system_dns = true
 netprobe_timeout = 60
 netprobe_address = '9.9.9.9:53'
-# cache
+
+# Cache settings
 cache = true
 cache_size = 4096
 cache_min_ttl = 2400
@@ -501,62 +508,51 @@ configure_resolved() {
     log "INFO" "Проверка и настройка systemd-resolved"
     
     # Проверка наличия systemd-resolved
-    if ! systemctl is-enabled systemd-resolved &>/dev/null; then
-        log "INFO" "systemd-resolved не установлен или отключен, пропускаем настройку"
+    if ! systemctl list-unit-files | grep -q systemd-resolved; then
+        log "INFO" "systemd-resolved не установлен, пропускаем настройку"
         return 0
     fi
     
-    log "INFO" "Настройка systemd-resolved"
+    # Если systemd-resolved уже отключен, пропускаем
+    if ! systemctl is-enabled systemd-resolved &>/dev/null; then
+        log "INFO" "systemd-resolved уже отключен"
+        return 0
+    fi
     
-    mkdir -p /etc/systemd/resolved.conf.d
-    cat > /etc/systemd/resolved.conf.d/dnscrypt.conf << EOF
-[Resolve]
-DNS=127.0.0.1
-DNSStubListener=no
-EOF
+    log "INFO" "Отключение systemd-resolved для освобождения порта 53"
     
-    # Проверяем, использует ли systemd-resolved порт 53
-    if lsof -i :53 | grep -q systemd-resolved; then
-        log "WARN" "systemd-resolved занимает порт 53, отключаем службу"
+    # Добавляем действие отката
+    ROLLBACK_NEEDED=true
+    ROLLBACK_ACTIONS+=("restore_systemd_resolved")
+    
+    # Создаем файл для хранения остановленных сервисов
+    mkdir -p "${TEMP_BACKUP_DIR}"
+    echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
+    
+    # Проверяем, настроен ли DNS-резолвинг с помощью backup_dns_server
+    if [ -n "${BACKUP_DNS_SERVER}" ]; then
+        log "INFO" "Используем резервный DNS-сервер: ${BACKUP_DNS_SERVER}"
+    else
+        log "WARN" "Резервный DNS не настроен перед отключением systemd-resolved"
+        log "INFO" "Устанавливаем временный DNS-сервер 8.8.8.8 для сохранения сетевого подключения"
+        export BACKUP_DNS_SERVER="8.8.8.8"
         
-        # Добавляем действие отката
-        ROLLBACK_NEEDED=true
-        ROLLBACK_ACTIONS+=("restore_systemd_resolved")
-        
-        # Создаем файл для хранения остановленных сервисов
-        mkdir -p "${TEMP_BACKUP_DIR}"
-        echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
-        
-        # Проверяем, настроен ли DNS-резолвинг с помощью backup_dns_server
-        if [ -n "${BACKUP_DNS_SERVER}" ]; then
-            log "INFO" "Используем резервный DNS-сервер: ${BACKUP_DNS_SERVER}"
-        else
-            log "WARN" "Резервный DNS не настроен перед отключением systemd-resolved"
-            log "INFO" "Устанавливаем временный DNS-сервер 8.8.8.8 для сохранения сетевого подключения"
-            export BACKUP_DNS_SERVER="8.8.8.8"
-            
-            chattr -i /etc/resolv.conf 2>/dev/null || true
-            cat > /etc/resolv.conf << EOF
+        chattr -i /etc/resolv.conf 2>/dev/null || true
+        cat > /etc/resolv.conf << EOF
 # Temporary resolv.conf by DNSCrypt installer
 nameserver 8.8.8.8
 options timeout:2 attempts:3
 EOF
-        fi
-        
-        systemctl stop systemd-resolved
-        systemctl disable systemd-resolved
-        log "INFO" "systemd-resolved остановлен и отключен"
-    else
-        # Перезапуск службы
-        if systemctl is-active --quiet systemd-resolved; then
-            if ! systemctl restart systemd-resolved; then
-                log "WARN" "Не удалось перезапустить systemd-resolved"
-                return 1
-            fi
-        fi
     fi
     
-    log "SUCCESS" "systemd-resolved успешно настроен"
+    # Останавливаем и отключаем systemd-resolved
+    systemctl stop systemd-resolved.service 2>/dev/null || true
+    systemctl disable systemd-resolved.service 2>/dev/null || true
+    
+    # Убираем символические ссылки
+    rm -f /etc/resolv.conf
+    
+    log "SUCCESS" "systemd-resolved успешно отключен"
     return 0
 }
 
@@ -634,10 +630,23 @@ check_required_ports() {
         
         # Обработка известных служб DNS
         case "$process" in
-            systemd-resolve*)
+            systemd-r*|systemd-resolve*)
                 log "INFO" "Порт занят системной службой systemd-resolved"
                 echo "systemd-resolved" >> "${TEMP_BACKUP_DIR}/stopped_services.txt"
-                log "INFO" "systemd-resolved будет настроен позже в процессе установки"
+                
+                # Правильно останавливаем systemd-resolved
+                log "INFO" "Останавливаем и отключаем systemd-resolved..."
+                systemctl stop systemd-resolved.service 2>/dev/null || true
+                systemctl disable systemd-resolved.service 2>/dev/null || true
+                
+                # Дополнительно убиваем процесс, если он все еще работает
+                if [ -n "$process_pid" ]; then
+                    kill -15 "$process_pid" 2>/dev/null || true
+                    sleep 2
+                    kill -9 "$process_pid" 2>/dev/null || true
+                fi
+                
+                log "INFO" "systemd-resolved остановлен"
                 ;;
             named|bind*)
                 log "INFO" "Порт занят сервером BIND"
@@ -686,27 +695,54 @@ check_required_ports() {
                 ;;
             *)
                 log "WARN" "Неизвестный процесс $process (PID: $process_pid) занимает порт 53"
-                echo "$process (PID: $process_pid)" >> "${TEMP_BACKUP_DIR}/unknown_processes.txt"
-                
-                # Спрашиваем пользователя, хочет ли он завершить процесс
-                read -p "Хотите завершить процесс $process (PID: $process_pid), занимающий порт 53? (y/n): " kill_process
-                if [[ "${kill_process,,}" == "y" ]]; then
-                    log "INFO" "Завершение процесса $process (PID: $process_pid)..."
-                    kill -15 "$process_pid" || {
-                        log "WARN" "Не удалось корректно завершить процесс, пробуем принудительно"
-                        kill -9 "$process_pid" || log "ERROR" "Не удалось завершить процесс"
-                    }
+                # Автоматически завершаем процесс для systemd-resolved
+                if [[ "$process" == "systemd-r"* ]]; then
+                    log "INFO" "Автоматическое завершение процесса systemd-resolved (PID: $process_pid)..."
+                    systemctl stop systemd-resolved.service 2>/dev/null || true
+                    systemctl disable systemd-resolved.service 2>/dev/null || true
+                    kill -15 "$process_pid" 2>/dev/null || true
+                    sleep 2
+                    kill -9 "$process_pid" 2>/dev/null || true
+                else
+                    echo "$process (PID: $process_pid)" >> "${TEMP_BACKUP_DIR}/unknown_processes.txt"
+                    
+                    # Спрашиваем пользователя, хочет ли он завершить процесс
+                    read -p "Хотите завершить процесс $process (PID: $process_pid), занимающий порт 53? (y/n): " kill_process
+                    if [[ "${kill_process,,}" == "y" ]]; then
+                        log "INFO" "Завершение процесса $process (PID: $process_pid)..."
+                        kill -15 "$process_pid" || {
+                            log "WARN" "Не удалось корректно завершить процесс, пробуем принудительно"
+                            kill -9 "$process_pid" || log "ERROR" "Не удалось завершить процесс"
+                        }
+                    fi
                 fi
                 ;;
         esac
         
         # Проверяем, освободился ли порт
-        sleep 1 # Даем время на остановку процессов
+        sleep 3 # Даем больше времени на остановку процессов
         if lsof -i :53 >/dev/null 2>&1; then
             log "WARN" "Порт 53 всё ещё занят после попытки остановить службы"
-            log "INFO" "Процессы, всё ещё использующие порт 53:"
-            lsof -i :53
-            return 1
+            log "INFO" "Попытка принудительного освобождения порта..."
+            
+            # Получаем новый список процессов
+            local remaining_pids=$(lsof -t -i :53 2>/dev/null)
+            if [ -n "$remaining_pids" ]; then
+                for pid in $remaining_pids; do
+                    log "INFO" "Принудительное завершение процесса PID: $pid"
+                    kill -9 "$pid" 2>/dev/null || true
+                done
+                sleep 2
+            fi
+            
+            # Финальная проверка
+            if lsof -i :53 >/dev/null 2>&1; then
+                log "WARN" "Порт 53 всё ещё занят. Показываем оставшиеся процессы:"
+                lsof -i :53
+                return 1
+            else
+                log "SUCCESS" "Порт 53 успешно освобожден принудительно"
+            fi
         else
             log "SUCCESS" "Порт 53 освобожден"
         fi
