@@ -836,7 +836,7 @@ change_dns() {
                     sleep 2
                     
                     verify_settings "$(echo $server_name | sed 's/\[\|\]//g' | sed "s/'//g" | cut -d',' -f1)"
-                }
+                fi
                 ;;
             
             3)
