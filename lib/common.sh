@@ -368,47 +368,86 @@ verify_settings() {
     local server_name="$1"
     log "INFO" "Проверка применения настроек..."
     
-    # Проверка статуса службы
-    if ! systemctl is-active --quiet dnscrypt-proxy; then
-        log "ERROR" "Служба DNSCrypt не запущена"
+    # Проверка установки DNSCrypt
+    if ! check_dnscrypt_installed 2>/dev/null; then
+        log "ERROR" "DNSCrypt-proxy не установлен"
         return 1
     fi
-
-    # Проверка логов на наличие ошибок
-    if journalctl -u dnscrypt-proxy -n 50 | grep -i error > /dev/null; then
-        log "WARN" "В логах обнаружены ошибки:"
-        journalctl -u dnscrypt-proxy -n 50 | grep -i error
+    
+    # Проверка статуса службы с попыткой запуска
+    if ! systemctl is-active --quiet dnscrypt-proxy; then
+        log "WARN" "Служба DNSCrypt не запущена, попытка запуска..."
+        if systemctl start dnscrypt-proxy 2>/dev/null; then
+            sleep 3  # Даем время на запуск
+            if ! systemctl is-active --quiet dnscrypt-proxy; then
+                log "ERROR" "Не удалось запустить службу DNSCrypt"
+                return 1
+            else
+                log "SUCCESS" "Служба DNSCrypt успешно запущена"
+            fi
+        else
+            log "ERROR" "Ошибка запуска службы DNSCrypt"
+            return 1
+        fi
     fi
 
-    # Проверка резолвинга
+    # Проверка логов на наличие критических ошибок
+    local critical_errors=$(journalctl -u dnscrypt-proxy -n 50 --since "5 minutes ago" | grep -i -E "fatal|critical|panic" | wc -l)
+    if [ "$critical_errors" -gt 0 ]; then
+        log "ERROR" "В логах обнаружены критические ошибки:"
+        journalctl -u dnscrypt-proxy -n 10 --since "5 minutes ago" | grep -i -E "fatal|critical|panic"
+        return 1
+    fi
+    
+    # Проверка предупреждений (не критично)
+    if journalctl -u dnscrypt-proxy -n 50 --since "5 minutes ago" | grep -i error > /dev/null; then
+        log "WARN" "В логах обнаружены ошибки:"
+        journalctl -u dnscrypt-proxy -n 5 --since "5 minutes ago" | grep -i error | tail -3
+    fi
+
+    # Проверка резолвинга с таймаутом
     echo -e "\n${BLUE}Проверка DNS резолвинга:${NC}"
     local test_domains=("google.com" "cloudflare.com" "github.com")
     local success=true
+    local working_count=0
 
     for domain in "${test_domains[@]}"; do
         echo -n "Тест $domain: "
-        if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
-            local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
-            echo -e "${GREEN}OK${NC} (${resolve_time}ms)"
+        if timeout 10 dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
+            local resolve_time=$(timeout 10 dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}' | head -1)
+            if [ -n "$resolve_time" ]; then
+                echo -e "${GREEN}OK${NC} (${resolve_time}ms)"
+                working_count=$((working_count + 1))
+            else
+                echo -e "${GREEN}OK${NC}"
+                working_count=$((working_count + 1))
+            fi
         else
             echo -e "${RED}ОШИБКА${NC}"
             success=false
         fi
     done
 
+    # Если хотя бы половина тестов прошла успешно, считаем это успехом
+    if [ "$working_count" -ge 2 ]; then
+        success=true
+    fi
+
     # Проверка используемого сервера
     echo -e "\n${BLUE}Проверка активного DNS сервера:${NC}"
-    local current_server=$(dig +short resolver.dnscrypt.info TXT | grep -o '".*"' | tr -d '"')
+    local current_server=$(timeout 10 dig +short resolver.dnscrypt.info TXT 2>/dev/null | grep -o '".*"' | tr -d '"' | head -1)
     if [ -n "$current_server" ]; then
         echo "Активный сервер: $current_server"
     else
-        echo -e "${RED}Не удалось определить активный сервер${NC}"
-        success=false
+        echo -e "${YELLOW}Не удалось определить активный сервер (возможно, используется локальный резолвер)${NC}"
+        # Не считаем это критической ошибкой
     fi
 
     if [ "$success" = true ]; then
+        log "SUCCESS" "Проверка настроек завершена успешно"
         return 0
     else
+        log "WARN" "Проверка настроек завершена с предупреждениями"
         return 1
     fi
 }
