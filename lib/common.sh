@@ -104,27 +104,71 @@ check_root() {
     fi
 }
 
+# Функция проверки установки DNSCrypt-proxy
+check_dnscrypt_installed() {
+    # Проверяем различные возможные расположения dnscrypt-proxy
+    local dnscrypt_locations=(
+        "/opt/dnscrypt-proxy/dnscrypt-proxy"
+        "/usr/local/bin/dnscrypt-proxy"
+        "/usr/bin/dnscrypt-proxy"
+        "$(which dnscrypt-proxy 2>/dev/null)"
+    )
+    
+    for location in "${dnscrypt_locations[@]}"; do
+        if [ -x "$location" ]; then
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Проверка зависимостей
 check_dependencies() {
     local deps=("$@")
     local missing=()
     
     for dep in "${deps[@]}"; do
-        if ! command -v "$dep" >/dev/null 2>&1; then
-            missing+=("$dep")
+        if [ "$dep" = "dnscrypt-proxy" ]; then
+            # Специальная проверка для dnscrypt-proxy
+            if ! check_dnscrypt_installed; then
+                missing+=("$dep")
+            fi
+        else
+            # Обычная проверка для других программ
+            if ! command -v "$dep" >/dev/null 2>&1; then
+                missing+=("$dep")
+            fi
         fi
     done
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         log "WARN" "Отсутствующие зависимости: ${missing[*]}"
         
-        if [[ -f /etc/debian_version ]]; then
-            apt-get update
-            apt-get install -y "${missing[@]}"
-        elif [[ -f /etc/redhat-release ]]; then
-            yum install -y "${missing[@]}"
-        else
-            log "ERROR" "Неподдерживаемый дистрибутив для автоматической установки"
+        # Для dnscrypt-proxy не пытаемся установить через пакетный менеджер
+        local installable=()
+        for dep in "${missing[@]}"; do
+            if [ "$dep" != "dnscrypt-proxy" ]; then
+                installable+=("$dep")
+            fi
+        done
+        
+        # Устанавливаем только те зависимости, которые можно установить через пакетный менеджер
+        if [[ ${#installable[@]} -gt 0 ]]; then
+            if [[ -f /etc/debian_version ]]; then
+                apt-get update
+                apt-get install -y "${installable[@]}"
+            elif [[ -f /etc/redhat-release ]]; then
+                yum install -y "${installable[@]}"
+            else
+                log "ERROR" "Неподдерживаемый дистрибутив для автоматической установки"
+                return 1
+            fi
+        fi
+        
+        # Если dnscrypt-proxy отсутствует, показываем специальное сообщение
+        if [[ " ${missing[@]} " =~ " dnscrypt-proxy " ]]; then
+            log "ERROR" "DNSCrypt-proxy не установлен. Используйте модуль установки из главного меню."
             return 1
         fi
     fi
