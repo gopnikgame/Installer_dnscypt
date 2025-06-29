@@ -25,19 +25,19 @@ check_current_dns() {
         log "INFO" "Конфигурация DNSCrypt:"
         
         # Получаем настроенные серверы
-        echo -e "${YELLOW}Настроенные серверы:${NC}"
+        safe_echo "${YELLOW}Настроенные серверы:${NC}"
         grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = /  /'
         
         # Проверяем прослушиваемые адреса
-        echo -e "\n${YELLOW}Прослушиваемые адреса:${NC}"
+        safe_echo "\n${YELLOW}Прослушиваемые адреса:${NC}"
         grep "listen_addresses" "$DNSCRYPT_CONFIG" | sed 's/listen_addresses = /  /'
         
         # Проверяем активные протоколы
-        echo -e "\n${YELLOW}Активные протоколы и настройки:${NC}"
+        safe_echo "\n${YELLOW}Активные протоколы и настройки:${NC}"
         grep -E "^[^#]*(require_dnssec|require_nolog|require_nofilter)" "$DNSCRYPT_CONFIG" | sed 's/^/  /'
         
         # Проверка активного сервера из логов
-        echo -e "\n${YELLOW}Информация о текущем сервере:${NC}"
+        safe_echo "\n${YELLOW}Информация о текущем сервере:${NC}"
         local active_server=$(journalctl -u dnscrypt-proxy -n 50 | grep "Server with lowest initial latency" | tail -n 1)
         if [ -n "$active_server" ]; then
             echo "  $active_server"
@@ -60,7 +60,7 @@ check_current_dns() {
         echo -n "  Тест ${test_domains[$domain]} ($domain): "
         if dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
             local resolve_time=$(dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}')
-            echo -e "${GREEN}OK${NC} (${resolve_time}ms)"
+            safe_echo "${GREEN}OK${NC} (${resolve_time}ms)"
             
             # Дополнительная информация для whoami.akamai.net
             if [ "$domain" == "whoami.akamai.net" ]; then
@@ -68,7 +68,7 @@ check_current_dns() {
                 dig +short "$domain" TXT | sed 's/"//g'
             fi
         else
-            echo -e "${RED}ОШИБКА${NC}"
+            safe_echo "${RED}ОШИБКА${NC}"
         fi
     done
     
@@ -201,18 +201,18 @@ EOF
         log "SUCCESS" "DNSCrypt работает корректно! Время ответа: ${serve_time}ms"
         
         # Проверяем используемый сервер
-        echo -e "${YELLOW}Проверка используемого DNS-сервера:${NC}"
+        safe_echo "${YELLOW}Проверка используемого DNS-сервера:${NC}"
         local dns_info=$(dig +short whoami.akamai.net TXT | sed 's/"//g')
         if [ -n "$dns_info" ]; then
-            echo -e "  Текущий DNS-сервер: ${GREEN}$dns_info${NC}"
+            safe_echo "  Текущий DNS-сервер: ${GREEN}$dns_info${NC}"
         else
-            echo -e "  ${YELLOW}Не удалось определить используемый DNS-сервер${NC}"
+            safe_echo "  ${YELLOW}Не удалось определить используемый DNS-сервер${NC}"
         fi
         
         # Отображаем информацию об активном сервере из логов DNSCrypt
         local active_server=$(journalctl -u dnscrypt-proxy -n 20 | grep -E "Server with lowest|Using server" | tail -n 1)
         if [ -n "$active_server" ]; then
-            echo -e "  ${GREEN}Активный DNSCrypt сервер: $active_server${NC}"
+            safe_echo "  ${GREEN}Активный DNSCrypt сервер: $active_server${NC}"
         fi
         
         return 0
@@ -225,11 +225,11 @@ EOF
         fi
         
         # Проверяем порты
-        echo -e "${YELLOW}Проверка прослушиваемых портов:${NC}"
+        safe_echo "${YELLOW}Проверка прослушиваемых портов:${NC}"
         check_port_usage 53
         
         # Проверяем логи на ошибки
-        echo -e "${YELLOW}Последние ошибки в логах DNSCrypt:${NC}"
+        safe_echo "${YELLOW}Последние ошибки в логах DNSCrypt:${NC}"
         journalctl -u dnscrypt-proxy -n 20 --grep="error|failed|warning" --no-pager
         
         return 1
@@ -244,59 +244,59 @@ get_dns_protocol_info() {
     local protocol_info=""
     local used_protocols=()
     
-    echo -e "${YELLOW}Анализ протоколов из конфигурации:${NC}"
+    safe_echo "${YELLOW}Анализ протоколов из конфигурации:${NC}"
     
     # Проверяем, включены ли различные протоколы в конфигурации
     if grep -q "^[^#]*dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
         used_protocols+=("DNSCrypt")
-        echo -e "  ${GREEN}✓${NC} DNSCrypt протокол ${GREEN}включен${NC}"
+        safe_echo "  ${GREEN}✓${NC} DNSCrypt протокол ${GREEN}включен${NC}"
     else
-        echo -e "  ${RED}✗${NC} DNSCrypt протокол ${RED}отключен${NC}"
+        safe_echo "  ${RED}✗${NC} DNSCrypt протокол ${RED}отключен${NC}"
     fi
     
     if grep -q "^[^#]*doh_servers = true" "$DNSCRYPT_CONFIG"; then
         used_protocols+=("DoH")
-        echo -e "  ${GREEN}✓${NC} DNS-over-HTTPS (DoH) ${GREEN}включен${NC}"
+        safe_echo "  ${GREEN}✓${NC} DNS-over-HTTPS (DoH) ${GREEN}включен${NC}"
     else
-        echo -e "  ${RED}✗${NC} DNS-over-HTTPS (DoH) ${RED}отключен${NC}"
+        safe_echo "  ${RED}✗${NC} DNS-over-HTTPS (DoH) ${RED}отключен${NC}"
     fi
     
     if grep -q "^[^#]*odoh_servers = true" "$DNSCRYPT_CONFIG"; then
         used_protocols+=("ODoH")
-        echo -e "  ${GREEN}✓${NC} Oblivious DoH (ODoH) ${GREEN}включен${NC}"
+        safe_echo "  ${GREEN}✓${NC} Oblivious DoH (ODoH) ${GREEN}включен${NC}"
     else
-        echo -e "  ${RED}✗${NC} Oblivious DoH (ODoH) ${RED}отключен${NC}"
+        safe_echo "  ${RED}✗${NC} Oblivious DoH (ODoH) ${RED}отключен${NC}"
     fi
     
     if grep -q "^[^#]*dot_servers = true" "$DNSCRYPT_CONFIG"; then
         used_protocols+=("DoT")
-        echo -e "  ${GREEN}✓${NC} DNS-over-TLS (DoT) ${GREEN}включен${NC}"
+        safe_echo "  ${GREEN}✓${NC} DNS-over-TLS (DoT) ${GREEN}включен${NC}"
     else
-        echo -e "  ${RED}✗${NC} DNS-over-TLS (DoT) ${RED}отключен${NC}"
+        safe_echo "  ${RED}✗${NC} DNS-over-TLS (DoT) ${RED}отключен${NC}"
     fi
     
     # HTTP/3 (QUIC) поддержка для DoH
     if grep -q "^[^#]*http3 = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "  ${GREEN}✓${NC} HTTP/3 (QUIC) для DoH ${GREEN}включен${NC}"
+        safe_echo "  ${GREEN}✓${NC} HTTP/3 (QUIC) для DoH ${GREEN}включен${NC}"
     else
-        echo -e "  ${RED}✗${NC} HTTP/3 (QUIC) для DoH ${RED}отключен${NC}"
+        safe_echo "  ${RED}✗${NC} HTTP/3 (QUIC) для DoH ${RED}отключен${NC}"
     fi
     
     # Проверка анонимизации
-    echo -e "\n${YELLOW}Анализ настроек анонимизации:${NC}"
+    safe_echo "\n${YELLOW}Анализ настроек анонимизации:${NC}"
     if grep -q "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" && grep -q "routes.*=.*\[" "$DNSCRYPT_CONFIG"; then
         used_protocols+=("Anonymized")
-        echo -e "  ${GREEN}✓${NC} Anonymized DNSCrypt ${GREEN}включен${NC}"
+        safe_echo "  ${GREEN}✓${NC} Anonymized DNSCrypt ${GREEN}включен${NC}"
         
         # Подсчет маршрутов анонимизации
         local route_count=$(grep -A 50 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep -E "\[.*\].*\[.*\]" | wc -l)
-        echo -e "  ${BLUE}ℹ${NC} Настроено маршрутов анонимизации: ${route_count}"
+        safe_echo "  ${BLUE}ℹ${NC} Настроено маршрутов анонимизации: ${route_count}"
     else
-        echo -e "  ${RED}✗${NC} Anonymized DNSCrypt ${RED}отключен${NC}"
+        safe_echo "  ${RED}✗${NC} Anonymized DNSCrypt ${RED}отключен${NC}"
     fi
     
     # Анализ логов для определения активного сервера и протокола
-    echo -e "\n${YELLOW}Анализ активных соединений по логам:${NC}"
+    safe_echo "\n${YELLOW}Анализ активных соединений по логам:${NC}"
     local dns_log=$(journalctl -u dnscrypt-proxy -n 100 --no-pager 2>/dev/null)
     
     # Поиск информации о протоколе
@@ -306,59 +306,59 @@ get_dns_protocol_info() {
         local server_name=$(echo "$protocol_line" | sed -E 's/.*Connected to ([^(]*).*/\1/' | xargs)
         local server_proto=$(echo "$protocol_line" | sed -E 's/.*\(([^)]*)\).*/\1/' | xargs)
         
-        echo -e "  ${GREEN}Активное соединение:${NC} $server_name"
-        echo -e "  ${GREEN}Используемый протокол:${NC} $server_proto"
+        safe_echo "  ${GREEN}Активное соединение:${NC} $server_name"
+        safe_echo "  ${GREEN}Используемый протокол:${NC} $server_proto"
     else
         # Альтернативный способ определения
         local stamp_line=$(echo "$dns_log" | grep -E "Server stamp:" | tail -n 1)
         
         if [ -n "$stamp_line" ]; then
             if echo "$stamp_line" | grep -q "sdns://A"; then
-                echo -e "  ${GREEN}Используемый протокол:${NC} DNSCrypt"
+                safe_echo "  ${GREEN}Используемый протокол:${NC} DNSCrypt"
             elif echo "$stamp_line" | grep -q "sdns://h"; then
-                echo -e "  ${GREEN}Используемый протокол:${NC} DNS-over-HTTPS (DoH)"
+                safe_echo "  ${GREEN}Используемый протокол:${NC} DNS-over-HTTPS (DoH)"
             elif echo "$stamp_line" | grep -q "sdns://i"; then
-                echo -e "  ${GREEN}Используемый протокол:${NC} DNS-over-TLS (DoT)"
+                safe_echo "  ${GREEN}Используемый протокол:${NC} DNS-over-TLS (DoT)"
             elif echo "$stamp_line" | grep -q "sdns://o"; then
-                echo -e "  ${GREEN}Используемый протокол:${NC} Oblivious DoH (ODoH)"
+                safe_echo "  ${GREEN}Используемый протокол:${NC} Oblivious DoH (ODoH)"
             else
-                echo -e "  ${YELLOW}Не удалось определить протокол из штампа сервера${NC}"
+                safe_echo "  ${YELLOW}Не удалось определить протокол из штампа сервера${NC}"
             fi
         else
-            echo -e "  ${YELLOW}Не удалось определить используемый протокол из логов${NC}"
+            safe_echo "  ${YELLOW}Не удалось определить используемый протокол из логов${NC}"
         fi
     fi
     
     # Проверка TCP/UDP
-    echo -e "\n${YELLOW}Анализ транспортного протокола:${NC}"
+    safe_echo "\n${YELLOW}Анализ транспортного протокола:${NC}"
     local force_tcp=$(grep "^[^#]*force_tcp" "$DNSCRYPT_CONFIG" | head -1 | grep -o "= ..*" | cut -d' ' -f2)
     
     if [ "$force_tcp" = "true" ]; then
-        echo -e "  ${BLUE}ℹ${NC} Принудительное использование TCP ${GREEN}включено${NC}"
+        safe_echo "  ${BLUE}ℹ${NC} Принудительное использование TCP ${GREEN}включено${NC}"
     else
         # Проверяем использование TCP/UDP по логам
         local udp_count=$(echo "$dns_log" | grep -i "udp" | grep -v "Failed\|Error" | wc -l)
         local tcp_count=$(echo "$dns_log" | grep -i "tcp" | grep -v "Failed\|Error" | wc -l)
         
         if [ "$udp_count" -gt 0 ] && [ "$tcp_count" -gt 0 ]; then
-            echo -e "  ${BLUE}ℹ${NC} Используются оба транспорта: TCP и UDP"
-            echo -e "  ${BLUE}ℹ${NC} UDP соединений: $udp_count, TCP соединений: $tcp_count"
+            safe_echo "  ${BLUE}ℹ${NC} Используются оба транспорта: TCP и UDP"
+            safe_echo "  ${BLUE}ℹ${NC} UDP соединений: $udp_count, TCP соединений: $tcp_count"
         elif [ "$udp_count" -gt 0 ]; then
-            echo -e "  ${BLUE}ℹ${NC} Преимущественно используется UDP"
+            safe_echo "  ${BLUE}ℹ${NC} Преимущественно используется UDP"
         elif [ "$tcp_count" -gt 0 ]; then
-            echo -e "  ${BLUE}ℹ${NC} Преимущественно используется TCP"
+            safe_echo "  ${BLUE}ℹ${NC} Преимущественно используется TCP"
         else
-            echo -e "  ${YELLOW}Не удалось определить транспортный протокол${NC}"
+            safe_echo "  ${YELLOW}Не удалось определить транспортный протокол${NC}"
         fi
     fi
     
     # Сводная информация
-    echo -e "\n${BLUE}Сводная информация о конфигурации DNS:${NC}"
+    safe_echo "\n${BLUE}Сводная информация о конфигурации DNS:${NC}"
     
     if [ ${#used_protocols[@]} -gt 0 ]; then
-        echo -e "  ${GREEN}Включенные протоколы:${NC} ${used_protocols[*]}"
+        safe_echo "  ${GREEN}Включенные протоколы:${NC} ${used_protocols[*]}"
     else
-        echo -e "  ${RED}Не найдены включенные DNS протоколы${NC}"
+        safe_echo "  ${RED}Не найдены включенные DNS протоколы${NC}"
     fi
     
     # Выполняем проверку безопасности DNS из библиотеки diagnostic.sh
@@ -376,7 +376,7 @@ main() {
     # Проверка установки DNSCrypt
     if ! check_dnscrypt_installed; then
         log "ERROR" "DNSCrypt-proxy не установлен. Установите его перед использованием этого модуля."
-        echo -e "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
+        safe_echo "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
         return 1
     fi
 
@@ -384,42 +384,42 @@ main() {
     check_current_dns
     
     # Проверяем, идет ли DNS-резолвинг через локальный DNSCrypt
-    echo -e "\n${BLUE}Проверка маршрутизации DNS-запросов...${NC}"
+    safe_echo "\n${BLUE}Проверка маршрутизации DNS-запросов...${NC}"
     local is_local_dns=1
     
     # Проверка содержимого resolv.conf
     if ! grep -q "nameserver 127.0.0.1" "$RESOLV_CONF" && ! grep -q "nameserver ::1" "$RESOLV_CONF"; then
         is_local_dns=0
-        echo -e "${RED}Проблема:${NC} В файле resolv.conf не настроен локальный DNS (127.0.0.1)"
+        safe_echo "${RED}Проблема:${NC} В файле resolv.conf не настроен локальный DNS (127.0.0.1)"
     fi
     
     # Проверка работы DNSCrypt
     if ! check_service_status "dnscrypt-proxy"; then
         is_local_dns=0
-        echo -e "${RED}Проблема:${NC} Служба DNSCrypt-proxy не запущена"
+        safe_echo "${RED}Проблема:${NC} Служба DNSCrypt-proxy не запущена"
     fi
     
     # Проверка разрешения имен через DNSCrypt
     if ! dig @127.0.0.1 cloudflare.com +short +timeout=5 > /dev/null 2>&1; then
         is_local_dns=0
-        echo -e "${RED}Проблема:${NC} DNSCrypt не отвечает на DNS-запросы"
+        safe_echo "${RED}Проблема:${NC} DNSCrypt не отвечает на DNS-запросы"
     fi
     
     # Предлагаем пользователю исправить проблемы, если они есть
     if [ $is_local_dns -eq 0 ]; then
-        echo -e "\n${YELLOW}Обнаружены проблемы с DNS-резолвингом.${NC}"
-        echo -e "${RED}DNS-запросы не проходят через DNSCrypt, что снижает безопасность и приватность!${NC}"
-        echo -e "${YELLOW}Хотите исправить проблему с DNS-резолвингом? (y/n)${NC}"
+        safe_echo "\n${YELLOW}Обнаружены проблемы с DNS-резолвингом.${NC}"
+        safe_echo "${RED}DNS-запросы не проходят через DNSCrypt, что снижает безопасность и приватность!${NC}"
+        safe_echo "${YELLOW}Хотите исправить проблему с DNS-резолвингом? (y/n)${NC}"
         read -p "> " fix_dns
         
         if [[ "${fix_dns,,}" == "y" ]]; then
             fix_all_dns_issues
         fi
     else
-        echo -e "\n${GREEN}DNS-резолвинг работает через DNSCrypt корректно.${NC}"
+        safe_echo "\n${GREEN}DNS-резолвинг работает через DNSCrypt корректно.${NC}"
         
         # Показываем информацию о протоколе DNS
-        echo -e "${YELLOW}Показать подробную информацию о протоколах DNS? (y/n)${NC}"
+        safe_echo "${YELLOW}Показать подробную информацию о протоколах DNS? (y/n)${NC}"
         read -p "> " show_protocol
         
         if [[ "${show_protocol,,}" == "y" ]]; then

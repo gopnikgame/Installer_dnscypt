@@ -23,7 +23,7 @@ restore_backup() {
     # Проверка root-прав уже выполнена через check_root при запуске
     
     # Выбор каталога с резервными копиями
-    echo -e "${BLUE}Выберите каталог с резервными копиями:${NC}"
+    safe_echo "${BLUE}Выберите каталог с резервными копиями:${NC}"
     echo "1) Стандартный каталог ($BACKUP_DIR)"
     echo "2) Локальный каталог ($LOCAL_BACKUP_DIR)"
     
@@ -48,7 +48,7 @@ restore_backup() {
     # Список доступных бэкапов
     local backups=($(ls -1 "$backup_base_dir"))
     
-    echo -e "${BLUE}Доступные резервные копии:${NC}"
+    safe_echo "${BLUE}Доступные резервные копии:${NC}"
     local i=1
     for backup in "${backups[@]}"; do
         # Добавляем информацию о дате создания, если это файл .bak
@@ -56,12 +56,12 @@ restore_backup() {
             local date_part=$(echo "$backup" | grep -oP '\d{8}_\d{6}')
             if [ -n "$date_part" ]; then
                 local formatted_date=$(date -d "${date_part:0:8} ${date_part:9:2}:${date_part:11:2}:${date_part:13:2}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
-                echo -e "${CYAN}$i)${NC} $backup ${YELLOW}(создано: $formatted_date)${NC}"
+                safe_echo "${CYAN}$i)${NC} $backup ${YELLOW}(создано: $formatted_date)${NC}"
             else
-                echo -e "${CYAN}$i)${NC} $backup"
+                safe_echo "${CYAN}$i)${NC} $backup"
             fi
         else
-            echo -e "${CYAN}$i)${NC} $backup"
+            safe_echo "${CYAN}$i)${NC} $backup"
         fi
         ((i++))
     done
@@ -152,7 +152,7 @@ restore_backup() {
         log "ERROR" "Ошибка запуска службы DNSCrypt"
         
         # Используем функции диагностики
-        echo -e "\n${YELLOW}Выполняется диагностика проблемы:${NC}"
+        safe_echo "\n${YELLOW}Выполняется диагностика проблемы:${NC}"
         check_dnscrypt_status
         check_port_usage 53
         
@@ -163,7 +163,7 @@ restore_backup() {
             log "ERROR" "Невозможно запустить службу DNSCrypt после восстановления"
             systemctl status $DNSCRYPT_SERVICE --no-pager
             
-            echo -e "\n${YELLOW}Вы можете попробовать:${NC}"
+            safe_echo "\n${YELLOW}Вы можете попробовать:${NC}"
             echo "1. Проверить конфигурацию: sudo dnscrypt-proxy -config $DNSCRYPT_CONFIG -check"
             echo "2. Запустить диагностику: sudo $SCRIPT_DIR/modules/fix_dns.sh"
             return 1

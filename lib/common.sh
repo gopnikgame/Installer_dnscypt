@@ -3,13 +3,48 @@
 # Версия библиотеки
 LIB_VERSION="1.1.0"
 
-# Цветовые коды для вывода
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Функция проверки поддержки цветов терминалом
+supports_color() {
+    # Проверяем, поддерживает ли терминал цвета
+    if [[ -t 1 ]] && [[ -n "${TERM:-}" ]] && [[ "${TERM}" != "dumb" ]]; then
+        # Проверяем переменную TERM и количество цветов
+        if command -v tput >/dev/null 2>&1; then
+            local colors=$(tput colors 2>/dev/null || echo 0)
+            [[ $colors -ge 8 ]]
+        else
+            # Если tput недоступен, проверяем стандартные TERM значения
+            case "${TERM}" in
+                *color*|xterm*|screen*|tmux*|rxvt*) return 0 ;;
+                *) return 1 ;;
+            esac
+        fi
+    else
+        return 1
+    fi
+}
+
+# Инициализация цветовых кодов
+init_colors() {
+    if supports_color; then
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        CYAN='\033[0;36m'
+        NC='\033[0m'
+    else
+        # Отключаем цвета, если терминал их не поддерживает
+        RED=''
+        GREEN=''
+        YELLOW=''
+        BLUE=''
+        CYAN=''
+        NC=''
+    fi
+}
+
+# Инициализируем цвета при загрузке библиотеки
+init_colors
 
 # Пути к основным файлам
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
@@ -70,6 +105,17 @@ import_lib() {
     fi
 }
 
+# Функция безопасного вывода с цветами
+safe_echo() {
+    local message="$1"
+    if supports_color; then
+        echo -e "$message"
+    else
+        # Удаляем ANSI коды, если цвета не поддерживаются
+        echo "$message" | sed 's/\x1b\[[0-9;]*m//g'
+    fi
+}
+
 # Функция логирования
 log() {
     local level="$1"
@@ -86,21 +132,17 @@ log() {
         *) color="$NC" ;;
     esac
     
-    # Вывод в консоль
-    echo -e "${color}[${timestamp}] [$level] ${message}${NC}"
+    # Вывод в консоль с проверкой поддержки цветов
+    if supports_color; then
+        echo -e "${color}[${timestamp}] [$level] ${message}${NC}"
+    else
+        echo "[${timestamp}] [$level] ${message}"
+    fi
     
     # Запись в лог-файл (без цветовых кодов)
     # Проверяем существование директории логов
     if [ -d "${LOG_DIR}" ]; then
         echo "[${timestamp}] [$level] ${message}" >> "${LOG_DIR}/dnscrypt-manager.log"
-    fi
-}
-
-# Проверка root-прав
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log "ERROR" "Этот скрипт должен быть запущен с правами root"
-        exit 1
     fi
 }
 
@@ -123,7 +165,15 @@ check_dnscrypt_installed() {
     return 1
 }
 
-# Проверка зависимостей
+# Проверка root-прав
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log "ERROR" "Этот скрипт должен быть запущен с правами root"
+        exit 1
+    fi
+}
+
+# Улучшенная проверка зависимостей
 check_dependencies() {
     local deps=("$@")
     local missing=()
@@ -272,9 +322,9 @@ print_header() {
     local padding=$(( (width - ${#title}) / 2 ))
     
     echo
-    echo -e "${BLUE}┌$(printf '─%.0s' $(seq 1 $width))┐${NC}"
-    echo -e "${BLUE}│$(printf ' %.0s' $(seq 1 $padding))${CYAN}${title}$(printf ' %.0s' $(seq 1 $((width - padding - ${#title}))))${BLUE}│${NC}"
-    echo -e "${BLUE}└$(printf '─%.0s' $(seq 1 $width))┘${NC}"
+    safe_echo "${BLUE}┌$(printf '─%.0s' $(seq 1 $width))┐${NC}"
+    safe_echo "${BLUE}│$(printf ' %.0s' $(seq 1 $padding))${CYAN}${title}$(printf ' %.0s' $(seq 1 $((width - padding - ${#title}))))${BLUE}│${NC}"
+    safe_echo "${BLUE}└$(printf '─%.0s' $(seq 1 $width))┘${NC}"
     echo
 }
 
@@ -323,87 +373,87 @@ check_current_settings() {
         return 1
     fi
 
-    echo -e "\n${BLUE}Текущие DNS серверы:${NC}"
+    safe_echo "\n${BLUE}Текущие DNS серверы:${NC}"
     grep "server_names" "$DNSCRYPT_CONFIG" | sed 's/server_names = //'
 
-    echo -e "\n${BLUE}Протоколы и безопасность:${NC}"
+    safe_echo "\n${BLUE}Протоколы и безопасность:${NC}"
     echo -n "DNSSEC: "
     if grep -q "require_dnssec = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
     echo -n "NoLog: "
     if grep -q "require_nolog = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
     echo -n "NoFilter: "
     if grep -q "require_nofilter = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
-    echo -e "\n${BLUE}Прослушиваемые адреса:${NC}"
+    safe_echo "\n${BLUE}Прослушиваемые адреса:${NC}"
     grep "listen_addresses" "$DNSCRYPT_CONFIG" | sed 's/listen_addresses = //'
 
-    echo -e "\n${BLUE}Поддерживаемые протоколы:${NC}"
+    safe_echo "\n${BLUE}Поддерживаемые протоколы:${NC}"
     echo -n "DNSCrypt: "
     if grep -q "dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
     echo -n "DNS-over-HTTPS (DoH): "
     if grep -q "doh_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
     echo -n "HTTP/3 (QUIC): "
     if grep -q "http3 = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
     echo -n "Oblivious DoH (ODoH): "
     if grep -q "odoh_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включен${NC}"
+        safe_echo "${GREEN}Включен${NC}"
     else
-        echo -e "${RED}Выключен${NC}"
+        safe_echo "${RED}Выключен${NC}"
     fi
 
-    echo -e "\n${BLUE}Настройки кэша:${NC}"
+    safe_echo "\n${BLUE}Настройки кэша:${NC}"
     echo -n "Кэширование: "
     if grep -q "cache = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включено${NC}"
+        safe_echo "${GREEN}Включено${NC}"
         echo "Размер кэша: $(grep "cache_size" "$DNSCRYPT_CONFIG" | sed 's/cache_size = //')"
         echo "Минимальное TTL: $(grep "cache_min_ttl" "$DNSCRYPT_CONFIG" | sed 's/cache_min_ttl = //')"
         echo "Максимальное TTL: $(grep "cache_max_ttl" "$DNSCRYPT_CONFIG" | sed 's/cache_max_ttl = //')"
     else
-        echo -e "${RED}Выключено${NC}"
+        safe_echo "${RED}Выключено${NC}"
     fi
     
-    echo -e "\n${BLUE}Дополнительные настройки:${NC}"
+    safe_echo "\n${BLUE}Дополнительные настройки:${NC}"
     echo -n "Блокировка IPv6: "
     if grep -q "block_ipv6 = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включена${NC}"
+        safe_echo "${GREEN}Включена${NC}"
     else
-        echo -e "${RED}Выключена${NC}"
+        safe_echo "${RED}Выключена${NC}"
     fi
 
     echo -n "Горячая перезагрузка конфигурации: "
     if grep -q "enable_hot_reload = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "${GREEN}Включена${NC}"
+        safe_echo "${GREEN}Включена${NC}"
     else
-        echo -e "${RED}Выключена${NC}"
+        safe_echo "${RED}Выключена${NC}"
     fi
 }
 
@@ -450,7 +500,7 @@ verify_settings() {
     fi
 
     # Проверка резолвинга с таймаутом
-    echo -e "\n${BLUE}Проверка DNS резолвинга:${NC}"
+    safe_echo "\n${BLUE}Проверка DNS резолвинга:${NC}"
     local test_domains=("google.com" "cloudflare.com" "github.com")
     local success=true
     local working_count=0
@@ -460,14 +510,14 @@ verify_settings() {
         if timeout 10 dig @127.0.0.1 "$domain" +short +timeout=5 > /dev/null 2>&1; then
             local resolve_time=$(timeout 10 dig @127.0.0.1 "$domain" +noall +stats 2>/dev/null | grep "Query time" | awk '{print $4}' | head -1)
             if [ -n "$resolve_time" ]; then
-                echo -e "${GREEN}OK${NC} (${resolve_time}ms)"
+                safe_echo "${GREEN}OK${NC} (${resolve_time}ms)"
                 working_count=$((working_count + 1))
             else
-                echo -e "${GREEN}OK${NC}"
+                safe_echo "${GREEN}OK${NC}"
                 working_count=$((working_count + 1))
             fi
         else
-            echo -e "${RED}ОШИБКА${NC}"
+            safe_echo "${RED}ОШИБКА${NC}"
             success=false
         fi
     done
@@ -478,12 +528,12 @@ verify_settings() {
     fi
 
     # Проверка используемого сервера
-    echo -e "\n${BLUE}Проверка активного DNS сервера:${NC}"
+    safe_echo "\n${BLUE}Проверка активного DNS сервера:${NC}"
     local current_server=$(timeout 10 dig +short resolver.dnscrypt.info TXT 2>/dev/null | grep -o '".*"' | tr -d '"' | head -1)
     if [ -n "$current_server" ]; then
         echo "Активный сервер: $current_server"
     else
-        echo -e "${YELLOW}Не удалось определить активный сервер (возможно, используется локальный резолвер)${NC}"
+        safe_echo "${YELLOW}Не удалось определить активный сервер (возможно, используется локальный резолвер)${NC}"
         # Не считаем это критической ошибкой
     fi
 
@@ -498,7 +548,7 @@ verify_settings() {
 
 # Функция для расширенной проверки конфигурации
 extended_verify_config() {
-    echo -e "\n${BLUE}Расширенная проверка конфигурации DNSCrypt:${NC}"
+    safe_echo "\n${BLUE}Расширенная проверка конфигурации DNSCrypt:${NC}"
     
     # Определяем путь к исполняемому файлу
     local dnscrypt_bin="/opt/dnscrypt-proxy/dnscrypt-proxy"
@@ -513,48 +563,48 @@ extended_verify_config() {
     
     # Проверка конфигурации
     if cd "$(dirname "$DNSCRYPT_CONFIG")" && "$dnscrypt_bin" -check -config="$DNSCRYPT_CONFIG" &>/dev/null; then
-        log "SUCCESS" "${GREEN}Конфигурация успешно проверена${NC}"
+        log "SUCCESS" "Конфигурация успешно проверена"
         
         # Проверка активных DNS-серверов
-        echo -e "\n${YELLOW}==== DNSCrypt активные соединения ====${NC}"
+        safe_echo "\n${YELLOW}==== DNSCrypt активные соединения ====${NC}"
         journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Connected to|Server with lowest" | tail -10
 
-        echo -e "\n${YELLOW}==== Текущий DNS сервер ====${NC}"
+        safe_echo "\n${YELLOW}==== Текущий DNS сервер ====${NC}"
         dig +short resolver.dnscrypt.info TXT | tr -d '"'
 
-        echo -e "\n${YELLOW}==== Тестирование доступности серверов ====${NC}"
+        safe_echo "\n${YELLOW}==== Тестирование доступности серверов ====${NC}"
         for domain in google.com cloudflare.com facebook.com example.com; do
             echo -n "Запрос $domain: "
             time=$(dig @127.0.0.1 +noall +stats "$domain" | grep "Query time" | awk '{print $4}')
             if [ -n "$time" ]; then
-                echo -e "${GREEN}OK ($time ms)${NC}"
+                safe_echo "${GREEN}OK ($time ms)${NC}"
             else
-                echo -e "${RED}ОШИБКА${NC}"
+                safe_echo "${RED}ОШИБКА${NC}"
             fi
         done
 
-        echo -e "\n${YELLOW}==== Проверка DNSSEC ====${NC}"
+        safe_echo "\n${YELLOW}==== Проверка DNSSEC ====${NC}"
         dig @127.0.0.1 dnssec-tools.org +dnssec +short
         
         # Проверка используемого протокола
-        echo -e "\n${YELLOW}==== Информация о протоколе ====${NC}"
+        safe_echo "\n${YELLOW}==== Информация о протоколе ====${NC}"
         local protocol_info=$(journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Using protocol|Using transport" | tail -1)
         if [ -n "$protocol_info" ]; then
-            echo -e "${GREEN}$protocol_info${NC}"
+            safe_echo "${GREEN}$protocol_info${NC}"
         else
-            echo -e "${YELLOW}Информация о протоколе не найдена${NC}"
+            safe_echo "${YELLOW}Информация о протоколе не найдена${NC}"
         fi
         
         # Проверка индикатора загрузки
         local load_info=$(systemctl status dnscrypt-proxy | grep "Memory\|CPU")
         if [ -n "$load_info" ]; then
-            echo -e "\n${YELLOW}==== Ресурсы системы ====${NC}"
+            safe_echo "\n${YELLOW}==== Ресурсы системы ====${NC}"
             echo "$load_info"
         fi
         
     else
-        log "ERROR" "${RED}Ошибка в конфигурации${NC}"
-        echo -e "${YELLOW}Подробности ошибки:${NC}"
+        log "ERROR" "Ошибка в конфигурации"
+        safe_echo "${YELLOW}Подробности ошибки:${NC}"
         "$dnscrypt_bin" -check -config="$DNSCRYPT_CONFIG" 2>&1 | head -10
     fi
 }
@@ -568,64 +618,78 @@ check_anonymized_dns() {
         return 1
     fi
     
-    echo -e "\n${BLUE}Текущие настройки анонимизации DNS:${NC}"
+    safe_echo "\n${BLUE}Текущие настройки анонимизации DNS:${NC}"
     
     # Проверка секции anonymized_dns
     if grep -q "\[anonymized_dns\]" "$DNSCRYPT_CONFIG"; then
-        echo "Секция anonymized_dns: ${GREEN}найдена${NC}"
+        echo -n "Секция anonymized_dns: "
+        safe_echo "${GREEN}найдена${NC}"
         
         # Проверка маршрутов
         if grep -A 10 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep -q "routes"; then
             echo -e "Настроенные маршруты:"
             grep -A 20 "routes = \[" "$DNSCRYPT_CONFIG" | grep -v "^\[" | grep -v "^$" | sed 's/^/    /'
         else
-            echo "Маршруты: ${RED}не настроены${NC}"
+            echo -n "Маршруты: "
+            safe_echo "${RED}не настроены${NC}"
         fi
         
         # Проверка skip_incompatible
         local skip_incompatible=$(grep -A 5 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep "skip_incompatible" | cut -d'=' -f2 | tr -d ' ')
         if [ -n "$skip_incompatible" ]; then
             if [ "$skip_incompatible" = "true" ]; then
-                echo "Пропуск несовместимых: ${GREEN}включен${NC}"
+                echo -n "Пропуск несовместимых: "
+                safe_echo "${GREEN}включен${NC}"
             else
-                echo "Пропуск несовместимых: ${RED}выключен${NC}"
+                echo -n "Пропуск несовместимых: "
+                safe_echo "${RED}выключен${NC}"
             fi
         else
-            echo "Пропуск несовместимых: ${YELLOW}не настроен (по умолчанию выключен)${NC}"
+            echo -n "Пропуск несовместимых: "
+            safe_echo "${YELLOW}не настроен (по умолчанию выключен)${NC}"
         fi
     else
-        echo "Секция anonymized_dns: ${RED}не найдена${NC}"
+        echo -n "Секция anonymized_dns: "
+        safe_echo "${RED}не найдена${NC}"
     fi
     
     # Проверка настроек ODoH
-    echo -e "\n${BLUE}Настройки Oblivious DoH (ODoH):${NC}"
+    safe_echo "\n${BLUE}Настройки Oblivious DoH (ODoH):${NC}"
     
     # Проверка поддержки ODoH
     if grep -q "odoh_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo "Поддержка ODoH: ${GREEN}включена${NC}"
+        echo -n "Поддержка ODoH: "
+        safe_echo "${GREEN}включена${NC}"
     else
-        echo "Поддержка ODoH: ${RED}выключена${NC}"
+        echo -n "Поддержка ODoH: "
+        safe_echo "${RED}выключена${NC}"
     fi
     
     # Проверка источников ODoH
     if grep -q "\[sources.odoh-servers\]" "$DNSCRYPT_CONFIG"; then
-        echo "Источник ODoH-серверов: ${GREEN}настроен${NC}"
+        echo -n "Источник ODoH-серверов: "
+        safe_echo "${GREEN}настроен${NC}"
     else
-        echo "Источник ODoH-серверов: ${RED}не настроен${NC}"
+        echo -n "Источник ODoH-серверов: "
+        safe_echo "${RED}не настроен${NC}"
     fi
     
     if grep -q "\[sources.odoh-relays\]" "$DNSCRYPT_CONFIG"; then
-        echo "Источник ODoH-релеев: ${GREEN}настроен${NC}"
+        echo -n "Источник ODoH-релеев: "
+        safe_echo "${GREEN}настроен${NC}"
     else
-        echo "Источник ODoH-релеев: ${RED}не настроен${NC}"
+        echo -n "Источник ODoH-релеев: "
+        safe_echo "${RED}не настроен${NC}"
     fi
     
     # Проверка списков серверов и релеев
-    echo -e "\n${BLUE}Настройки источников списков:${NC}"
+    safe_echo "\n${BLUE}Настройки источников списков:${NC}"
     if grep -q "\[sources.'relays'\]" "$DNSCRYPT_CONFIG"; then
-        echo "Источник релеев для Anonymized DNSCrypt: ${GREEN}настроен${NC}"
+        echo -n "Источник релеев для Anonymized DNSCrypt: "
+        safe_echo "${GREEN}настроен${NC}"
     else
-        echo "Источник релеев для Anonymized DNSCrypt: ${RED}не настроен${NC}"
+        echo -n "Источник релеев для Anonymized DNSCrypt: "
+        safe_echo "${RED}не настроен${NC}"
     fi
 }
 
@@ -633,15 +697,15 @@ check_anonymized_dns() {
 list_available_servers() {
     # Проверка наличия кэш-файла с серверами
     if [ ! -f "$SERVERS_CACHE" ]; then
-        echo -e "${YELLOW}Файл с серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
+        safe_echo "${YELLOW}Файл с серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
         return 1
     fi
     
     # Читаем и выводим список DNSCrypt-серверов
-    echo -e "${YELLOW}Список может быть большим. Показаны только первые 20 серверов.${NC}"
+    safe_echo "${YELLOW}Список может быть большим. Показаны только первые 20 серверов.${NC}"
     grep -A 1 "^## " "$SERVERS_CACHE" | grep -v "^--" | head -n 40 | sed 'N;s/\n/ - /' | sed 's/## //' | nl
     
-    echo -e "\n${YELLOW}Для просмотра полного списка серверов выполните:${NC}"
+    safe_echo "\n${YELLOW}Для просмотра полного списка серверов выполните:${NC}"
     echo "cat $SERVERS_CACHE | grep -A 1 '^## ' | grep -v '^--' | sed 'N;s/\\n/ - /' | sed 's/## //'"
 }
 
@@ -649,7 +713,7 @@ list_available_servers() {
 list_available_relays() {
     # Проверка наличия кэш-файла с релеями
     if [ ! -f "$RELAYS_CACHE" ]; then
-        echo -e "${YELLOW}Файл с релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
+        safe_echo "${YELLOW}Файл с релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
         return 1
     fi
     
@@ -661,7 +725,7 @@ list_available_relays() {
 list_available_odoh_servers() {
     # Проверка наличия кэш-файла с ODoH-серверами
     if [ ! -f "$ODOH_SERVERS_CACHE" ]; then
-        echo -e "${YELLOW}Файл с ODoH-серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
+        safe_echo "${YELLOW}Файл с ODoH-серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
         return 1
     fi
     
@@ -673,7 +737,7 @@ list_available_odoh_servers() {
 list_available_odoh_relays() {
     # Проверка наличия кэш-файла с ODoH-релеями
     if [ ! -f "$ODOH_RELAYS_CACHE" ]; then
-        echo -e "${YELLOW}Файл с ODoH-релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
+        safe_echo "${YELLOW}Файл с ODoH-релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
         return 1
     fi
     
@@ -685,7 +749,7 @@ list_available_odoh_relays() {
 test_server_latency() {
     log "INFO" "Тестирование времени отклика DNS-серверов..."
     
-    echo -e "\n${BLUE}Тестирование времени отклика:${NC}"
+    safe_echo "\n${BLUE}Тестирование времени отклика:${NC}"
     echo "Этот тест измеряет время ответа каждого настроенного DNS-сервера."
     echo "Результаты помогут выбрать наиболее быстрые серверы для вашего местоположения."
     
@@ -708,13 +772,13 @@ test_server_latency() {
         
         if [ -z "$server_list" ]; then
             log "ERROR" "Не удалось определить список настроенных серверов"
-            echo -e "${YELLOW}Проверьте корректность конфигурации DNSCrypt (server_names).${NC}"
+            safe_echo "${YELLOW}Проверьте корректность конфигурации DNSCrypt (server_names).${NC}"
             return 1
         fi
     fi
     
-    echo -e "\n${YELLOW}Настроенные серверы:${NC} $server_list"
-    echo -e "\n${BLUE}Выполняется тестирование, пожалуйста, подождите...${NC}"
+    safe_echo "\n${YELLOW}Настроенные серверы:${NC} $server_list"
+    safe_echo "\n${BLUE}Выполняется тестирование, пожалуйста, подождите...${NC}"
     
     # Создаем временный файл для результатов
     local tmp_file=$(mktemp)
@@ -744,24 +808,24 @@ test_server_latency() {
         
         if [ "$best_time" -eq 999999 ]; then
             best_time="таймаут"
-            echo -e "${RED}$best_time${NC}"
+            safe_echo "${RED}$best_time${NC}"
         else
             best_time="${best_time}ms"
-            echo -e "${GREEN}$best_time${NC} $server_ip"
+            safe_echo "${GREEN}$best_time${NC} $server_ip"
             echo "$server $best_time $server_ip" >> "$tmp_file"
         fi
     done
     
     # Проверяем, есть ли результаты
     if [ ! -s "$tmp_file" ]; then
-        echo -e "\n${RED}Не удалось получить результаты тестирования для серверов.${NC}"
-        echo -e "${YELLOW}Возможно, серверы недоступны или некорректно настроены.${NC}"
+        safe_echo "\n${RED}Не удалось получить результаты тестирования для серверов.${NC}"
+        safe_echo "${YELLOW}Возможно, серверы недоступны или некорректно настроены.${NC}"
         rm -f "$tmp_file"
         return 1
     fi
     
     # Сортируем и выводим результаты от самого быстрого к самому медленному
-    echo -e "\n${BLUE}Результаты тестирования (отсортированы по времени отклика):${NC}"
+    safe_echo "\n${BLUE}Результаты тестирования (отсортированы по времени отклика):${NC}"
     sort -k2 -n "$tmp_file" | sed 's/ms//g' | awk '{printf "%-30s %-15s", $1, $2"ms"; for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | \
         awk 'BEGIN {print "Сервер                         Время отклика    IP адрес"; print "----------------------------------------------------------------------"}; {print $0}'
     
@@ -775,20 +839,21 @@ test_server_latency() {
 configure_load_balancing() {
     log "INFO" "Настройка стратегии балансировки нагрузки..."
     
-    echo -e "\n${BLUE}Стратегии балансировки нагрузки:${NC}"
+    safe_echo "\n${BLUE}Стратегии балансировки нагрузки:${NC}"
     echo "Стратегия балансировки определяет, как выбираются серверы для запросов из отсортированного списка (от самого быстрого к самому медленному)."
     echo
     echo "Доступные стратегии:"
-    echo -e "${YELLOW}first${NC} - всегда выбирается самый быстрый сервер" 
-    echo -e "${YELLOW}p2${NC} - случайный выбор из 2 самых быстрых серверов (рекомендуется)"
-    echo -e "${YELLOW}ph${NC} - случайный выбор из быстрейшей половины серверов"
-    echo -e "${YELLOW}random${NC} - случайный выбор из всех серверов"
+    safe_echo "${YELLOW}first${NC} - всегда выбирается самый быстрый сервер" 
+    safe_echo "${YELLOW}p2${NC} - случайный выбор из 2 самых быстрых серверов (рекомендуется)"
+    safe_echo "${YELLOW}ph${NC} - случайный выбор из быстрейшей половины серверов"
+    safe_echo "${YELLOW}random${NC} - случайный выбор из всех серверов"
     echo
     
     # Получаем текущую стратегию
     local current_strategy=$(grep "lb_strategy = " "$DNSCRYPT_CONFIG" | sed "s/lb_strategy = '\(.*\)'/\1/" | tr -d ' ' || echo "p2")
     
-    echo -e "Текущая стратегия: ${GREEN}$current_strategy${NC}"
+    echo -n "Текущая стратегия: "
+    safe_echo "${GREEN}$current_strategy${NC}"
     echo
     echo "1) first (самый быстрый сервер)"
     echo "2) p2 (топ-2 серверов)"
@@ -867,11 +932,11 @@ check_port_usage() {
     local processes=$(lsof -i ":$port" | grep -v "^COMMAND")
     
     if [ -n "$processes" ]; then
-        echo -e "\n${YELLOW}Порт $port используется следующими процессами:${NC}"
+        safe_echo "\n${YELLOW}Порт $port используется следующими процессами:${NC}"
         echo "$processes"
         return 1
     else
-        echo -e "\n${GREEN}Порт $port свободен${NC}"
+        safe_echo "\n${GREEN}Порт $port свободен${NC}"
         return 0
     fi
 }

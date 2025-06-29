@@ -32,7 +32,7 @@ configure_anonymized_dns() {
     
     # Проверка наличия DNSCrypt-серверов
     if ! grep -q "dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
-        echo -e "\n${YELLOW}Внимание: DNSCrypt-серверы не включены в конфигурации.${NC}"
+        safe_echo "\n${YELLOW}Внимание: DNSCrypt-серверы не включены в конфигурации.${NC}"
         echo "Anonymized DNS работает только с DNSCrypt-серверами."
         read -p "Хотите включить DNSCrypt-серверы? (y/n): " enable_dnscrypt
         
@@ -115,7 +115,7 @@ add_relays_source() {
 configure_odoh() {
     log "INFO" "Настройка Oblivious DoH (ODoH)..."
     
-    echo -e "\n${BLUE}Oblivious DoH (ODoH):${NC}"
+    safe_echo "\n${BLUE}Oblivious DoH (ODoH):${NC}"
     echo "ODoH - это протокол, который помогает скрыть ваш IP-адрес от DNS-сервера,"
     echo "отправляя зашифрованные запросы через промежуточный релей."
     echo "В отличие от Anonymized DNSCrypt, ODoH работает с серверами DNS-over-HTTPS (DoH)."

@@ -18,14 +18,66 @@ source "$SCRIPT_DIR/lib/diagnostic.sh" 2>/dev/null || {
     log "INFO" "Библиотека diagnostic.sh не загружена, некоторые функции могут быть недоступны"
 }
 
+# Проверка root-прав
+check_root
+
+# Проверка наличия DNSCrypt-proxy с улучшенной диагностикой
+if ! check_dnscrypt_installed; then
+    log "ERROR" "DNSCrypt-proxy не установлен или не найден!"
+    safe_echo "\n${YELLOW}Для установки DNSCrypt-proxy используйте главное меню (пункт 1).${NC}"
+    safe_echo "${BLUE}Поддерживаемые расположения:${NC}"
+    echo "  - /opt/dnscrypt-proxy/dnscrypt-proxy"
+    echo "  - /usr/local/bin/dnscrypt-proxy"
+    echo "  - /usr/bin/dnscrypt-proxy"
+    echo
+    read -p "Нажмите Enter для выхода..."
+    exit 1
+fi
+
+# Проверка конфигурационного файла
+if [ ! -f "$DNSCRYPT_CONFIG" ]; then
+    log "ERROR" "Файл конфигурации DNSCrypt не найден: $DNSCRYPT_CONFIG"
+    safe_echo "\n${YELLOW}Возможные причины:${NC}"
+    echo "  - DNSCrypt установлен, но не настроен"
+    echo "  - Конфигурационный файл перемещен"
+    echo "  - Установка повреждена"
+    echo
+    safe_echo "${BLUE}Рекомендуемые действия:${NC}"
+    echo "  1. Запустите модуль проверки установки (пункт 2 главного меню)"
+    echo "  2. При необходимости переустановите DNSCrypt (пункт 1 главного меню)"
+    echo
+    read -p "Нажмите Enter для выхода..."
+    exit 1
+fi
+
+# Проверка дополнительных зависимостей (не критично для работы модуля)
+missing_tools=()
+for tool in "dig" "sed"; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing_tools+=("$tool")
+    fi
+done
+
+if [[ ${#missing_tools[@]} -gt 0 ]]; then
+    log "WARN" "Отсутствующие инструменты: ${missing_tools[*]}"
+    safe_echo "${YELLOW}Некоторые функции могут работать некорректно.${NC}"
+    
+    # Попытка установить недостающие инструменты
+    if [[ -f /etc/debian_version ]]; then
+        apt-get update && apt-get install -y "${missing_tools[@]}"
+    elif [[ -f /etc/redhat-release ]]; then
+        yum install -y "${missing_tools[@]}"
+    fi
+fi
+
 # Настройка маршрутов для Anonymized DNSCrypt
 configure_anonymized_routes() {
     log "INFO" "Настройка маршрутов для Anonymized DNSCrypt..."
     
-    echo -e "\n${BLUE}Настройка маршрутов анонимизации:${NC}"
+    safe_echo "\n${BLUE}Настройка маршрутов анонимизации:${NC}"
     echo "Маршруты определяют, через какие релеи будут проходить запросы к определенным серверам."
     echo "Это предотвращает прямую связь между вашим IP и запрашиваемыми доменами."
-    echo -e "${YELLOW}Важно:${NC} Выбирайте релеи и серверы, управляемые разными организациями!"
+    safe_echo "${YELLOW}Важно:${NC} Выбирайте релеи и серверы, управляемые разными организациями!"
     echo
     echo "1) Использовать автоматическую маршрутизацию (через wildcard)"
     echo "2) Настроить маршруты вручную"
@@ -37,7 +89,7 @@ configure_anonymized_routes() {
     case $route_option in
         1)
             # Автоматическая маршрутизация
-            echo -e "\n${BLUE}Настройка автоматической маршрутизации:${NC}"
+            safe_echo "\n${BLUE}Настройка автоматической маршрутизации:${NC}"
             echo "1) Автоматический выбор релеев для всех серверов"
             echo "2) Указать конкретные релеи для всех серверов"
             echo "0) Назад"
@@ -52,10 +104,10 @@ configure_anonymized_routes() {
                     ;;
                 2)
                     # Выбрать релеи для всех серверов
-                    echo -e "\n${BLUE}Доступные релеи:${NC}"
+                    safe_echo "\n${BLUE}Доступные релеи:${NC}"
                     list_available_relays
                     
-                    echo -e "\n${YELLOW}Введите имена релеев через запятую (например: anon-cs-fr,anon-bcn,anon-tiarap):${NC}"
+                    safe_echo "\n${YELLOW}Введите имена релеев через запятую (например: anon-cs-fr,anon-bcn,anon-tiarap):${NC}"
                     read -p "Релеи: " relay_list
                     
                     if [ -z "$relay_list" ]; then
@@ -84,10 +136,10 @@ configure_anonymized_routes() {
             ;;
         3)
             # Просмотр доступных серверов и релеев
-            echo -e "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
+            safe_echo "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
             list_available_servers
             
-            echo -e "\n${BLUE}Доступные релеи:${NC}"
+            safe_echo "\n${BLUE}Доступные релеи:${NC}"
             list_available_relays
             
             read -p "Нажмите Enter для продолжения..."
@@ -105,7 +157,7 @@ configure_anonymized_routes() {
 
 # Ручная настройка маршрутов
 configure_manual_routes() {
-    echo -e "\n${BLUE}Ручная настройка маршрутов:${NC}"
+    safe_echo "\n${BLUE}Ручная настройка маршрутов:${NC}"
     echo "1) Добавить новый маршрут"
     echo "2) Удалить существующий маршрут"
     echo "3) Заменить все маршруты"
@@ -135,10 +187,10 @@ configure_manual_routes() {
 
 # Добавление нового маршрута
 add_anonymized_route() {
-    echo -e "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
+    safe_echo "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
     list_available_servers
     
-    echo -e "\n${YELLOW}Введите имя DNSCrypt-сервера (или '*' для всех серверов):${NC}"
+    safe_echo "\n${YELLOW}Введите имя DNSCrypt-сервера (или '*' для всех серверов):${NC}"
     read -p "Имя сервера: " server_name
     
     if [ -z "$server_name" ]; then
@@ -146,10 +198,10 @@ add_anonymized_route() {
         return 1
     fi
     
-    echo -e "\n${BLUE}Доступные релеи:${NC}"
+    safe_echo "\n${BLUE}Доступные релеи:${NC}"
     list_available_relays
     
-    echo -e "\n${YELLOW}Введите имена релеев через запятую (например: anon-cs-fr,anon-bcn,anon-tiarap):${NC}"
+    safe_echo "\n${YELLOW}Введите имена релеев через запятую (например: anon-cs-fr,anon-bcn,anon-tiarap):${NC}"
     read -p "Релеи: " relay_list
     
     if [ -z "$relay_list" ]; then
@@ -169,7 +221,7 @@ add_anonymized_route() {
 
 # Удаление существующего маршрута
 remove_anonymized_route() {
-    echo -e "\n${BLUE}Существующие маршруты:${NC}"
+    safe_echo "\n${BLUE}Существующие маршруты:${NC}"
     
     # Извлекаем и нумеруем маршруты
     local routes=$(grep -A 20 "routes = \[" "$DNSCRYPT_CONFIG" | grep -v "routes = \[" | grep -v "\]" | grep "server_name" | sed 's/^[ \t]*//' | nl)
@@ -181,7 +233,7 @@ remove_anonymized_route() {
     
     echo "$routes"
     
-    echo -e "\n${YELLOW}Введите номер маршрута для удаления:${NC}"
+    safe_echo "\n${YELLOW}Введите номер маршрута для удаления:${NC}"
     read -p "Номер маршрута: " route_number
     
     if ! [[ "$route_number" =~ ^[0-9]+$ ]]; then
@@ -205,8 +257,8 @@ remove_anonymized_route() {
 
 # Замена всех маршрутов
 replace_anonymized_routes() {
-    echo -e "\n${BLUE}Замена всех маршрутов:${NC}"
-    echo -e "${YELLOW}Внимание: Эта операция заменит все существующие маршруты!${NC}"
+    safe_echo "\n${BLUE}Замена всех маршрутов:${NC}"
+    safe_echo "${YELLOW}Внимание: Эта операция заменит все существующие маршруты!${NC}"
     read -p "Продолжить? (y/n): " confirm
     
     if [[ "${confirm,,}" != "y" ]]; then
@@ -219,10 +271,10 @@ replace_anonymized_routes() {
     local continue_adding="y"
     
     while [[ "${continue_adding,,}" == "y" ]]; do
-        echo -e "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
+        safe_echo "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
         list_available_servers
         
-        echo -e "\n${YELLOW}Введите имя DNSCrypt-сервера (или '*' для всех серверов):${NC}"
+        safe_echo "\n${YELLOW}Введите имя DNSCrypt-сервера (или '*' для всех серверов):${NC}"
         read -p "Имя сервера: " server_name
         
         if [ -z "$server_name" ]; then
@@ -230,10 +282,10 @@ replace_anonymized_routes() {
             continue
         fi
         
-        echo -e "\n${BLUE}Доступные релеи:${NC}"
+        safe_echo "\n${BLUE}Доступные релеи:${NC}"
         list_available_relays
         
-        echo -e "\n${YELLOW}Введите имена релеев через запятую (например: anon-cs-fr,anon-bcn,anon-tiarap):${NC}"
+        safe_echo "\n${YELLOW}Введите имена релеев через запятую (например: anon-cs-fr,anon-bcn,anon-tiarap):${NC}"
         read -p "Релеи: " relay_list
         
         if [ -z "$relay_list" ]; then
@@ -250,7 +302,7 @@ replace_anonymized_routes() {
         
         routes+="\n    { server_name='$server_name', via=[$relays] }"
         
-        echo -e "\n${YELLOW}Добавить еще один маршрут? (y/n):${NC}"
+        safe_echo "\n${YELLOW}Добавить еще один маршрут? (y/n):${NC}"
         read -p "> " continue_adding
     done
     
@@ -319,7 +371,7 @@ add_odoh_sources() {
 configure_odoh_routes() {
     log "INFO" "Настройка маршрутов для ODoH..."
     
-    echo -e "\n${YELLOW}Важное замечание:${NC}"
+    safe_echo "\n${YELLOW}Важное замечание:${NC}"
     echo "Для корректной работы ODoH необходимо включить источники odoh-servers и odoh-relays,"
     echo "а также добавить маршруты для серверов ODoH через релеи ODoH."
     
@@ -336,7 +388,7 @@ configure_odoh_routes() {
         sed -i "/doh_servers = /a odoh_servers = true" "$DNSCRYPT_CONFIG" 2>/dev/null
     fi
     
-    echo -e "\n${BLUE}Настройка маршрутов ODoH:${NC}"
+    safe_echo "\n${BLUE}Настройка маршрутов ODoH:${NC}"
     echo "1) Использовать автоматическую маршрутизацию (через wildcard)"
     echo "2) Добавить маршрут для конкретного ODoH-сервера"
     echo "3) Просмотреть доступные ODoH-серверы и релеи"
@@ -347,7 +399,7 @@ configure_odoh_routes() {
     case $odoh_route_option in
         1)
             # Автоматическая маршрутизация для ODoH
-            echo -e "\n${YELLOW}Введите имена ODoH-релеев через запятую или '*' для автоматического выбора:${NC}"
+            safe_echo "\n${YELLOW}Введите имена ODoH-релеев через запятую или '*' для автоматического выбора:${NC}"
             read -p "ODoH-релеи: " odoh_relays
             
             if [ -z "$odoh_relays" ]; then
@@ -364,10 +416,10 @@ configure_odoh_routes() {
             ;;
         2)
             # Маршрут для конкретного ODoH-сервера
-            echo -e "\n${BLUE}Доступные ODoH-серверы:${NC}"
+            safe_echo "\n${BLUE}Доступные ODoH-серверы:${NC}"
             list_available_odoh_servers
             
-            echo -e "\n${YELLOW}Введите имя ODoH-сервера:${NC}"
+            safe_echo "\n${YELLOW}Введите имя ODoH-сервера:${NC}"
             read -p "ODoH-сервер: " odoh_server
             
             if [ -z "$odoh_server" ]; then
@@ -375,10 +427,10 @@ configure_odoh_routes() {
                 return 1
             fi
             
-            echo -e "\n${BLUE}Доступные ODoH-релеи:${NC}"
+            safe_echo "\n${BLUE}Доступные ODoH-релеи:${NC}"
             list_available_odoh_relays
             
-            echo -e "\n${YELLOW}Введите имена ODoH-релеев через запятую:${NC}"
+            safe_echo "\n${YELLOW}Введите имена ODoH-релеев через запятую:${NC}"
             read -p "ODoH-релеи: " odoh_relays
             
             if [ -z "$odoh_relays" ]; then
@@ -390,10 +442,10 @@ configure_odoh_routes() {
             ;;
         3)
             # Просмотр доступных ODoH-серверов и релеев
-            echo -e "\n${BLUE}Доступные ODoH-серверы:${NC}"
+            safe_echo "\n${BLUE}Доступные ODoH-серверы:${NC}"
             list_available_odoh_servers
             
-            echo -e "\n${BLUE}Доступные ODoH-релеи:${NC}"
+            safe_echo "\n${BLUE}Доступные ODoH-релеи:${NC}"
             list_available_odoh_relays
             
             read -p "Нажмите Enter для продолжения..."
@@ -435,7 +487,7 @@ add_anonymized_route_for_odoh() {
 
 # Настройка дополнительной конфигурации анонимного DNS
 configure_additional_anon_settings() {
-    echo -e "\n${BLUE}Дополнительные настройки анонимного DNS:${NC}"
+    safe_echo "\n${BLUE}Дополнительные настройки анонимного DNS:${NC}"
     echo "1) Настройка пропуска несовместимых серверов"
     echo "2) Настройка логирования и отладки"
     echo "0) Отмена"
@@ -445,7 +497,7 @@ configure_additional_anon_settings() {
     case $additional_option in
         1)
             # Настройка пропуска несовместимых серверов
-            echo -e "\n${BLUE}Пропуск несовместимых серверов:${NC}"
+            safe_echo "\n${BLUE}Пропуск несовместимых серверов:${NC}"
             echo "Если включено, серверы несовместимые с анонимизацией будут пропускаться"
             echo "вместо использования прямого подключения к ним."
             
@@ -471,12 +523,12 @@ configure_additional_anon_settings() {
             ;;
         2)
             # Настройка логирования и отладки
-            echo -e "\n${BLUE}Настройка логирования и отладки:${NC}"
+            safe_echo "\n${BLUE}Настройка логирования и отладки:${NC}"
             echo "Увеличение уровня логирования помогает диагностировать проблемы с анонимизацией."
             
             echo "Текущий уровень логирования: $(grep "log_level = " "$DNSCRYPT_CONFIG" | sed 's/log_level = //' || echo "не настроен")"
             
-            echo -e "\nУровни логирования:"
+            safe_echo "\nУровни логирования:"
             echo "0: Только важные сообщения (по умолчанию)"
             echo "1: Добавить предупреждения"
             echo "2: Добавить информационные сообщения"
@@ -562,12 +614,6 @@ main_menu() {
         read -p "Нажмите Enter для продолжения..."
     done
 }
-
-# Проверка root-прав
-check_root
-
-# Проверка наличия DNSCrypt-proxy
-check_dependencies "dnscrypt-proxy" "dig" "sed"
 
 # Запуск основного меню
 log "INFO" "Запуск модуля управления анонимным DNS..."

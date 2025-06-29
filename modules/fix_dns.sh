@@ -10,8 +10,8 @@ source "$SCRIPT_DIR/lib/common.sh"
 # Подключение библиотеки диагностики
 source "$SCRIPT_DIR/lib/diagnostic.sh" 2>/dev/null || {
     log "ERROR" "Не удалось подключить библиотеку diagnostic.sh"
-    echo -e "${RED}Для полной функциональности требуется библиотека diagnostic.sh${NC}"
-    echo -e "${YELLOW}Продолжение работы с ограниченной функциональностью...${NC}"
+    safe_echo "${RED}Для полной функциональности требуется библиотека diagnostic.sh${NC}"
+    safe_echo "${YELLOW}Продолжение работы с ограниченной функциональностью...${NC}"
 }
 
 # Функция для исправления проблем с DNS
@@ -26,19 +26,19 @@ fix_dns_issues() {
     
     # Проверка наличия DNSCrypt
     if ! check_dnscrypt_installed; then
-        echo -e "${YELLOW}Сначала нужно установить DNSCrypt-proxy.${NC}"
-        echo -e "Используйте пункт меню 'Установить DNSCrypt'"
+        safe_echo "${YELLOW}Сначала нужно установить DNSCrypt-proxy.${NC}"
+        echo "Используйте пункт меню 'Установить DNSCrypt'"
         return 1
     fi
     
     # Проверка порта DNS (53)
-    echo -e "\n${BLUE}Проверка занятости порта DNS (53):${NC}"
+    safe_echo "\n${BLUE}Проверка занятости порта DNS (53):${NC}"
     if ! check_port_usage 53; then
-        echo -e "${YELLOW}Порт 53 занят другим процессом. Попытка решения проблемы...${NC}"
+        safe_echo "${YELLOW}Порт 53 занят другим процессом. Попытка решения проблемы...${NC}"
         
         # Проверка systemd-resolved
         if systemctl is-active --quiet systemd-resolved; then
-            echo -e "${YELLOW}Служба systemd-resolved активна и может блокировать порт 53.${NC}"
+            safe_echo "${YELLOW}Служба systemd-resolved активна и может блокировать порт 53.${NC}"
             echo "Варианты решения:"
             echo "1) Отключить systemd-resolved и перенастроить resolv.conf"
             echo "2) Изменить порт прослушивания DNSCrypt-proxy (не 53)"
@@ -67,7 +67,7 @@ fix_dns_issues() {
                     # Используем add_config_option из common.sh
                     add_config_option "$DNSCRYPT_CONFIG" "" "listen_addresses" "['127.0.0.1:5353']"
                     
-                    echo -e "${YELLOW}DNSCrypt настроен на порт 5353. Необходимо обновить resolv.conf${NC}"
+                    safe_echo "${YELLOW}DNSCrypt настроен на порт 5353. Необходимо обновить resolv.conf${NC}"
                     
                     # Настройка resolver-а для работы с нестандартным портом
                     chattr -i "$RESOLV_CONF" 2>/dev/null
@@ -91,10 +91,10 @@ EOF
             esac
         else
             # Другой процесс занимает порт 53
-            echo -e "${YELLOW}Другой процесс занимает порт 53. Определение...${NC}"
+            safe_echo "${YELLOW}Другой процесс занимает порт 53. Определение...${NC}"
             lsof -i :53
             
-            echo -e "\nВарианты решения:"
+            safe_echo "\nВарианты решения:"
             echo "1) Остановить другой процесс (может повлиять на работу системы)"
             echo "2) Изменить порт прослушивания DNSCrypt-proxy (не 53)"
             echo "0) Отмена"
@@ -105,7 +105,7 @@ EOF
                 1)
                     # Попытка остановить процесс
                     log "WARN" "Внимание! Остановка процессов может повлиять на работу системы!"
-                    echo -e "${RED}Эта операция может быть опасной. Вы уверены?${NC}"
+                    safe_echo "${RED}Эта операция может быть опасной. Вы уверены?${NC}"
                     read -p "Продолжить? (y/n): " confirm
                     
                     if [[ "${confirm,,}" == "y" ]]; then
@@ -128,7 +128,7 @@ EOF
                     add_config_option "$DNSCRYPT_CONFIG" "" "listen_addresses" "['127.0.0.1:5353']"
                     
                     # Обновление resolv.conf для использования порта 5353
-                    echo -e "${YELLOW}DNSCrypt настроен на порт 5353. Обновление настроек системы...${NC}"
+                    safe_echo "${YELLOW}DNSCrypt настроен на порт 5353. Обновление настроек системы...${NC}"
                     
                     # Настройка resolver-а
                     chattr -i "$RESOLV_CONF" 2>/dev/null
@@ -154,14 +154,14 @@ EOF
     fi
     
     # Проверка и перезапуск службы DNSCrypt
-    echo -e "\n${BLUE}Проверка и перезапуск службы DNSCrypt-proxy:${NC}"
+    safe_echo "\n${BLUE}Проверка и перезапуск службы DNSCrypt-proxy:${NC}"
     systemctl is-active --quiet "$DNSCRYPT_SERVICE" || systemctl start "$DNSCRYPT_SERVICE"
     restart_service "$DNSCRYPT_SERVICE"
     
     # Проверка системного резолвера
     check_system_resolver
     
-    echo -e "\n${BLUE}Проверка настроек после исправления:${NC}"
+    safe_echo "\n${BLUE}Проверка настроек после исправления:${NC}"
     if verify_settings ""; then
         log "SUCCESS" "DNS-резолвинг работает корректно после исправления"
         return 0
@@ -169,7 +169,7 @@ EOF
         log "ERROR" "Проблемы с DNS-резолвингом сохраняются"
         
         # Предлагаем дополнительную диагностику
-        echo -e "\n${YELLOW}Хотите выполнить дополнительную диагностику?${NC}"
+        safe_echo "\n${YELLOW}Хотите выполнить дополнительную диагностику?${NC}"
         read -p "Выполнить расширенную диагностику? (y/n): " more_diag
         if [[ "${more_diag,,}" == "y" ]]; then
             extended_verify_config
@@ -187,7 +187,7 @@ check_and_configure_anonymized_dns() {
     # Используем функцию из библиотеки common.sh
     check_anonymized_dns
     
-    echo -e "\n${BLUE}Управление анонимным DNS:${NC}"
+    safe_echo "\n${BLUE}Управление анонимным DNS:${NC}"
     echo "1) Запустить модуль управления анонимным DNS"
     echo "0) Назад"
     
@@ -201,7 +201,7 @@ check_and_configure_anonymized_dns() {
                 bash "$SCRIPT_DIR/modules/manage_anonymized_dns.sh"
             else
                 log "ERROR" "Модуль manage_anonymized_dns.sh не найден."
-                echo -e "${YELLOW}Проверьте наличие модуля и повторите попытку.${NC}"
+                safe_echo "${YELLOW}Проверьте наличие модуля и повторите попытку.${NC}"
                 return 1
             fi
             ;;
@@ -225,13 +225,13 @@ show_system_info() {
     else
         print_header "ИНФОРМАЦИЯ О СИСТЕМЕ"
         
-        echo -e "${BLUE}Операционная система:${NC}"
+        safe_echo "${BLUE}Операционная система:${NC}"
         cat /etc/os-release | grep "PRETTY_NAME" | cut -d= -f2 | tr -d '"'
         
-        echo -e "\n${BLUE}DNS настройки:${NC}"
+        safe_echo "\n${BLUE}DNS настройки:${NC}"
         echo "Сервер в resolv.conf: $(grep "nameserver" /etc/resolv.conf | head -1 | awk '{print $2}')"
         
-        echo -e "\n${BLUE}Сетевые порты:${NC}"
+        safe_echo "\n${BLUE}Сетевые порты:${NC}"
         ss -tuln | grep -E ":53 |:443 |:853 |:8053 "
     fi
     

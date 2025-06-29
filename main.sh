@@ -192,13 +192,13 @@ run_module() {
     fi
     
     print_header "${MODULES[$module_name]}"
-    echo -e "${BLUE}Описание:${NC} ${MODULE_DESCRIPTIONS[$module_name]}"
+    safe_echo "${BLUE}Описание:${NC} ${MODULE_DESCRIPTIONS[$module_name]}"
     echo
     
     # Дополнительное предупреждение для модуля удаления
     if [[ "$module_name" == "autoremove.sh" ]]; then
-        echo -e "${RED}ВАЖНО: Данный модуль полностью удалит DNSCrypt и все связанные с ним файлы!${NC}"
-        echo -e "${RED}Будут восстановлены стандартные настройки DNS, и удалены все конфигурации DNSCrypt.${NC}"
+        safe_echo "${RED}ВАЖНО: Данный модуль полностью удалит DNSCrypt и все связанные с ним файлы!${NC}"
+        safe_echo "${RED}Будут восстановлены стандартные настройки DNS, и удалены все конфигурации DNSCrypt.${NC}"
         echo
         read -p "Вы действительно хотите продолжить? (y/n): " confirm
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -220,14 +220,14 @@ run_module() {
 show_module_info() {
     local module_name="$1"
     
-    echo -e "\n${CYAN}Подробная информация о модуле:${NC}"
-    echo -e "${GREEN}Название:${NC} ${MODULES[$module_name]}"
-    echo -e "${GREEN}Файл:${NC} ${module_name}"
-    echo -e "${GREEN}Описание:${NC} ${MODULE_DESCRIPTIONS[$module_name]}"
+    safe_echo "\n${CYAN}Подробная информация о модуле:${NC}"
+    safe_echo "${GREEN}Название:${NC} ${MODULES[$module_name]}"
+    safe_echo "${GREEN}Файл:${NC} ${module_name}"
+    safe_echo "${GREEN}Описание:${NC} ${MODULE_DESCRIPTIONS[$module_name]}"
     
     # Дополнительная информация из самого модуля
     if [[ -f "${MODULES_DIR}/${module_name}" ]]; then
-        echo -e "\n${CYAN}Дополнительная информация:${NC}"
+        safe_echo "\n${CYAN}Дополнительная информация:${NC}"
         grep -A 10 "# Description:" "${MODULES_DIR}/${module_name}" | sed 's/# Description: //' | grep -v "#"
     fi
 }
@@ -236,25 +236,25 @@ show_module_info() {
 show_menu() {
     while true; do
         print_header "DNSCRYPT MANAGER v${SCRIPT_VERSION}"
-        echo -e "${YELLOW}Текущая дата:${NC} $(date '+%Y-%m-%d %H:%M:%S')"
-        echo -e "${YELLOW}Выберите действие:${NC}"
+        safe_echo "${YELLOW}Текущая дата:${NC} $(date '+%Y-%m-%d %H:%M:%S')"
+        safe_echo "${YELLOW}Выберите действие:${NC}"
         
         local i=1
         for module in "${MODULE_ORDER[@]}"; do
             # Выделяем модуль удаления красным цветом
             if [[ "$module" == "autoremove.sh" ]]; then
-                echo -e "$i) ${RED}${MODULES[$module]}${NC}"
+                safe_echo "$i) ${RED}${MODULES[$module]}${NC}"
             else
-                echo -e "$i) ${GREEN}${MODULES[$module]}${NC}"
+                safe_echo "$i) ${GREEN}${MODULES[$module]}${NC}"
             fi
             ((i++))
         done
         
-        echo -e "$i) ${YELLOW}Обновить все модули${NC}"
+        safe_echo "$i) ${YELLOW}Обновить все модули${NC}"
         ((i++))
-        echo -e "$i) ${YELLOW}Показать информацию о модуле${NC}"
+        safe_echo "$i) ${YELLOW}Показать информацию о модуле${NC}"
         ((i++))
-        echo -e "0) ${RED}Выход${NC}"
+        safe_echo "0) ${RED}Выход${NC}"
         
         read -p "Выберите опцию [0-$((i-1))]: " choice
         
@@ -265,10 +265,10 @@ show_menu() {
                 ;;
             $((i-1)))
                 # Показать информацию о модуле
-                echo -e "\n${BLUE}Выберите модуль для просмотра информации:${NC}"
+                safe_echo "\n${BLUE}Выберите модуль для просмотра информации:${NC}"
                 local j=1
                 for module in "${MODULE_ORDER[@]}"; do
-                    echo -e "$j) ${MODULES[$module]}"
+                    safe_echo "$j) ${MODULES[$module]}"
                     ((j++))
                 done
                 read -p "Выберите модуль [1-$((j-1))]: " module_choice
@@ -322,7 +322,7 @@ main() {
     
     # Первоначальное обновление модулей
     if ! update_modules; then
-        log "WARN" "Не все модулы были загружены корректно"
+        log "WARN" "Не все модули были загружены корректно"
     fi
     
     show_menu

@@ -1104,8 +1104,8 @@ EOF
                 # Третья попытка с альтернативным портом
                 if systemctl restart dnscrypt-proxy; then
                     log "SUCCESS" "DNSCrypt запущен на порту 5353"
-                    echo -e "${YELLOW}ВНИМАНИЕ: DNSCrypt работает на порту 5353 вместо стандартного 53${NC}"
-                    echo -e "Это решение проблемы с правами доступа."
+                    safe_echo "${YELLOW}ВНИМАНИЕ: DNSCrypt работает на порту 5353 вместо стандартного 53${NC}"
+                    safe_echo "Это решение проблемы с правами доступа."
                 else
                     log "ERROR" "Не удалось запустить службу даже на альтернативном порту"
                     rollback_changes
@@ -1173,25 +1173,25 @@ EOF
     
     # Финал
     print_header "УСТАНОВКА ЗАВЕРШЕНА"
-    echo -e "\n${GREEN}Установка DNSCrypt-proxy завершена успешно!${NC}"
-    echo -e "Для проверки выполните: ${YELLOW}dig @127.0.0.1 google.com${NC}"
-    echo -e "Для управления и дополнительной настройки используйте DNSCrypt Manager\n"
+    safe_echo "\n${GREEN}Установка DNSCrypt-proxy завершена успешно!${NC}"
+    safe_echo "Для проверки выполните: ${YELLOW}dig @127.0.0.1 google.com${NC}"
+    safe_echo "Для управления и дополнительной настройки используйте DNSCrypt Manager\n"
 
     # Проверка наличия потенциальных проблем
     if systemctl is-active --quiet systemd-resolved; then
-        echo -e "${YELLOW}ВНИМАНИЕ:${NC} systemd-resolved всё еще активен, что может вызвать конфликты"
-        echo -e "Рекомендуется выполнить: ${CYAN}sudo systemctl disable --now systemd-resolved${NC}\n"
+        safe_echo "${YELLOW}ВНИМАНИЕ:${NC} systemd-resolved всё еще активен, что может вызвать конфликты"
+        safe_echo "Рекомендуется выполнить: ${CYAN}sudo systemctl disable --now systemd-resolved${NC}\n"
     fi
 
     # Проверка порта
     local current_port=$(grep "listen_addresses" "$CONFIG_FILE" | grep -o ":[0-9]*" | tr -d ':')
     if [ "$current_port" != "53" ]; then
-        echo -e "${YELLOW}ВНИМАНИЕ:${NC} DNSCrypt работает на порту $current_port вместо стандартного 53"
-        echo -e "Это нормально для решения проблем с правами доступа.\n"
+        safe_echo "${YELLOW}ВНИМАНИЕ:${NC} DNSCrypt работает на порту $current_port вместо стандартного 53"
+        safe_echo "Это нормально для решения проблем с правами доступа.\n"
     fi
 
-    echo -e "После установки рекомендуется перезагрузить систему:"
-    echo -e "${CYAN}sudo reboot${NC}\n"
+    safe_echo "После установки рекомендуется перезагрузить систему:"
+    safe_echo "${CYAN}sudo reboot${NC}\n"
     
     return 0
 }

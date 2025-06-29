@@ -85,7 +85,7 @@ apply_settings() {
 
 # Настройка HTTP/3 для DoH
 configure_http3() {
-    echo -e "\n${BLUE}Настройка HTTP/3 (QUIC) для DNS-over-HTTPS:${NC}"
+    safe_echo "\n${BLUE}Настройка HTTP/3 (QUIC) для DNS-over-HTTPS:${NC}"
     echo "HTTP/3 - новый протокол, использующий UDP вместо TCP, что может улучшить скорость"
     echo "и устойчивость соединения, особенно в сетях с большими потерями пакетов."
     echo
@@ -111,7 +111,7 @@ configure_http3() {
                 sed -i "/http3 = true/a http3_probe = false" "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}HTTP/3 включен${NC}"
+            log "SUCCESS" "HTTP/3 включен"
             ;;
         2)
             # Включаем HTTP/3 и пробу
@@ -127,7 +127,7 @@ configure_http3() {
                 sed -i "/http3 = true/a http3_probe = true" "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}HTTP/3 и проба HTTP/3 включены${NC}"
+            log "SUCCESS" "HTTP/3 и проба HTTP/3 включены"
             ;;
         3)
             # Отключаем HTTP/3
@@ -141,13 +141,13 @@ configure_http3() {
                 sed -i "s/http3_probe = .*/http3_probe = false/" "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}HTTP/3 отключен${NC}"
+            log "SUCCESS" "HTTP/3 отключен"
             ;;
         0)
             return 0
             ;;
         *)
-            log "ERROR" "${RED}Неверный выбор${NC}"
+            log "ERROR" "Неверный выбор"
             return 1
             ;;
     esac
@@ -159,7 +159,7 @@ configure_http3() {
 
 # Настройка параметров кэширования
 configure_cache() {
-    echo -e "\n${BLUE}Настройка кэширования DNS:${NC}"
+    safe_echo "\n${BLUE}Настройка кэширования DNS:${NC}"
     echo "Кэширование DNS уменьшает задержку запросов и снижает нагрузку на сеть."
     echo
     echo "1) Включить кэширование (рекомендуется)"
@@ -199,7 +199,7 @@ configure_cache() {
                 sed -i "/cache_neg_min_ttl = /a cache_neg_max_ttl = 600" "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}Кэширование включено с настройками по умолчанию${NC}"
+            log "SUCCESS" "Кэширование включено с настройками по умолчанию"
             ;;
         2)
             # Выключаем кэширование
@@ -209,11 +209,11 @@ configure_cache() {
                 sed -i "/\[sources\]/i cache = false" "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}Кэширование отключено${NC}"
+            log "SUCCESS" "Кэширование отключено"
             ;;
         3)
             # Настраиваем параметры кэша
-            echo -e "\n${BLUE}Настройка параметров кэша:${NC}"
+            safe_echo "\n${BLUE}Настройка параметров кэша:${NC}"
             
             # Проверяем, включен ли кэш
             if ! grep -q "cache = true" "$DNSCRYPT_CONFIG"; then
@@ -233,23 +233,23 @@ configure_cache() {
             local current_neg_max_ttl=$(grep "cache_neg_max_ttl = " "$DNSCRYPT_CONFIG" | sed 's/cache_neg_max_ttl = //' || echo "600")
             
             # Запрашиваем новые значения
-            echo -e "Текущий размер кэша: ${YELLOW}$current_size${NC} (рекомендуется 4096 для домашней сети)"
+            safe_echo "Текущий размер кэша: ${YELLOW}$current_size${NC} (рекомендуется 4096 для домашней сети)"
             read -p "Новый размер кэша [Enter для сохранения текущего]: " new_size
             new_size=${new_size:-$current_size}
             
-            echo -e "Текущее минимальное TTL: ${YELLOW}$current_min_ttl${NC} секунд (рекомендуется 2400)"
+            safe_echo "Текущее минимальное TTL: ${YELLOW}$current_min_ttl${NC} секунд (рекомендуется 2400)"
             read -p "Новое минимальное TTL [Enter для сохранения текущего]: " new_min_ttl
             new_min_ttl=${new_min_ttl:-$current_min_ttl}
             
-            echo -e "Текущее максимальное TTL: ${YELLOW}$current_max_ttl${NC} секунд (рекомендуется 86400)"
+            safe_echo "Текущее максимальное TTL: ${YELLOW}$current_max_ttl${NC} секунд (рекомендуется 86400)"
             read -p "Новое максимальное TTL [Enter для сохранения текущего]: " new_max_ttl
             new_max_ttl=${new_max_ttl:-$current_max_ttl}
             
-            echo -e "Текущее минимальное отрицательное TTL: ${YELLOW}$current_neg_min_ttl${NC} секунд (рекомендуется 60)"
+            safe_echo "Текущее минимальное отрицательное TTL: ${YELLOW}$current_neg_min_ttl${NC} секунд (рекомендуется 60)"
             read -p "Новое минимальное отрицательное TTL [Enter для сохранения текущего]: " new_neg_min_ttl
             new_neg_min_ttl=${new_neg_min_ttl:-$current_neg_min_ttl}
             
-            echo -e "Текущее максимальное отрицательное TTL: ${YELLOW}$current_neg_max_ttl${NC} секунд (рекомендуется 600)"
+            safe_echo "Текущее максимальное отрицательное TTL: ${YELLOW}$current_neg_max_ttl${NC} секунд (рекомендуется 600)"
             read -p "Новое максимальное отрицательное TTL [Enter для сохранения текущего]: " new_neg_max_ttl
             new_neg_max_ttl=${new_neg_max_ttl:-$current_neg_max_ttl}
             
@@ -284,13 +284,13 @@ configure_cache() {
                 sed -i "/cache_neg_min_ttl = /a cache_neg_max_ttl = $new_neg_max_ttl" "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}Параметры кэша обновлены${NC}"
+            log "SUCCESS" "Параметры кэша обновлены"
             ;;
         0)
             return 0
             ;;
         *)
-            log "ERROR" "${RED}Неверный выбор${NC}"
+            log "ERROR" "Неверный выбор"
             return 1
             ;;
     esac
@@ -303,7 +303,7 @@ configure_cache() {
 # Меню расширенных настроек
 advanced_settings() {
     while true; do
-        echo -e "\n${BLUE}Дополнительные настройки DNSCrypt:${NC}"
+        safe_echo "\n${BLUE}Дополнительные настройки DNSCrypt:${NC}"
         echo "1) Настройка HTTP/3 для DoH"
         echo "2) Настройка кэширования DNS"
         echo "3) Управление блокировкой IPv6"
@@ -322,7 +322,7 @@ advanced_settings() {
                 configure_cache
                 ;;
             3)
-                echo -e "\n${BLUE}Блокировка IPv6:${NC}"
+                safe_echo "\n${BLUE}Блокировка IPv6:${NC}"
                 echo "Если у вас нет IPv6-подключения, блокировка запросов IPv6 может ускорить работу DNS."
                 echo "Внимание: на некоторых ОС (например, macOS) блокировка может вызвать проблемы с разрешением имен."
                 
@@ -333,14 +333,14 @@ advanced_settings() {
                     else
                         sed -i "/\[query_log\]/i block_ipv6 = true" "$DNSCRYPT_CONFIG"
                     fi
-                    log "SUCCESS" "${GREEN}Блокировка IPv6 включена${NC}"
+                    log "SUCCESS" "Блокировка IPv6 включена"
                 else
                     if grep -q "block_ipv6 = " "$DNSCRYPT_CONFIG"; then
                         sed -i "s/block_ipv6 = .*/block_ipv6 = false/" "$DNSCRYPT_CONFIG"
                     else
                         sed -i "/\[query_log\]/i block_ipv6 = false" "$DNSCRYPT_CONFIG"
                     fi
-                    log "SUCCESS" "${GREEN}Блокировка IPv6 отключена${NC}"
+                    log "SUCCESS" "Блокировка IPv6 отключена"
                 fi
                 
                 restart_service "dnscrypt-proxy"
@@ -349,7 +349,7 @@ advanced_settings() {
                 configure_sources
                 ;;
             5)
-                echo -e "\n${BLUE}Горячая перезагрузка:${NC}"
+                safe_echo "\n${BLUE}Горячая перезагрузка:${NC}"
                 echo "Позволяет вносить изменения в файлы конфигурации без перезапуска прокси."
                 echo "Может увеличить использование CPU и памяти. По умолчанию отключена."
                 
@@ -360,14 +360,14 @@ advanced_settings() {
                     else
                         sed -i "/\[query_log\]/i enable_hot_reload = true" "$DNSCRYPT_CONFIG"
                     fi
-                    log "SUCCESS" "${GREEN}Горячая перезагрузка включена${NC}"
+                    log "SUCCESS" "Горячая перезагрузка включена"
                 else
                     if grep -q "enable_hot_reload = " "$DNSCRYPT_CONFIG"; then
                         sed -i "s/enable_hot_reload = .*/enable_hot_reload = false/" "$DNSCRYPT_CONFIG"
                     else
                         sed -i "/\[query_log\]/i enable_hot_reload = false" "$DNSCRYPT_CONFIG"
                     fi
-                    log "SUCCESS" "${GREEN}Горячая перезагрузка отключена${NC}"
+                    log "SUCCESS" "Горячая перезагрузка отключена"
                 fi
                 
                 restart_service "dnscrypt-proxy"
@@ -380,7 +380,7 @@ advanced_settings() {
                 return 0
                 ;;
             *)
-                log "ERROR" "${RED}Неверный выбор${NC}"
+                log "ERROR" "Неверный выбор"
                 ;;
         esac
     done
@@ -388,13 +388,13 @@ advanced_settings() {
 
 # Настройка источников DNS серверов
 configure_sources() {
-    echo -e "\n${BLUE}Настройка источников DNS серверов:${NC}"
+    safe_echo "\n${BLUE}Настройка источников DNS серверов:${NC}"
     echo "DNSCrypt-proxy может загружать списки серверов из различных источников."
     
     # Проверяем наличие секции [sources] в конфигурации
     if ! grep -q "\[sources\]" "$DNSCRYPT_CONFIG"; then
-        echo -e "${RED}Секция [sources] не найдена в конфигурации.${NC}"
-        echo -e "Добавляем стандартный источник public-resolvers."
+        safe_echo "${RED}Секция [sources] не найдена в конфигурации.${NC}"
+        safe_echo "Добавляем стандартный источник public-resolvers."
         
         cat >> "$DNSCRYPT_CONFIG" << EOL
 
@@ -407,11 +407,11 @@ configure_sources() {
   refresh_delay = 72
   prefix = ''
 EOL
-        log "SUCCESS" "${GREEN}Добавлен стандартный источник public-resolvers${NC}"
+        log "SUCCESS" "Добавлен стандартный источник public-resolvers"
     fi
     
     # Читаем текущие источники
-    echo -e "\n${BLUE}Текущие источники:${NC}"
+    safe_echo "\n${BLUE}Текущие источники:${NC}"
     sed -n '/\[sources\]/,/\[.*/p' "$DNSCRYPT_CONFIG" | grep -v "^\[" | grep -v "^$"
     
     echo -e "\n1) Добавить новый источник"
@@ -423,18 +423,18 @@ EOL
     
     case $source_option in
         1)
-            echo -e "\n${BLUE}Добавление нового источника:${NC}"
+            safe_echo "\n${BLUE}Добавление нового источника:${NC}"
             read -p "Имя источника (например, 'my-resolvers'): " source_name
             
             if [ -z "$source_name" ]; then
-                log "ERROR" "${RED}Имя источника не может быть пустым${NC}"
+                log "ERROR" "Имя источника не может быть пустым"
                 return 1
             fi
             
             read -p "URL источника: " source_url
             
             if [ -z "$source_url" ]; then
-                log "ERROR" "${RED}URL источника не может быть пустым${NC}"
+                log "ERROR" "URL источника не может быть пустым"
                 return 1
             fi
             
@@ -472,18 +472,18 @@ EOL
                 echo "  prefix = ''" >> "$DNSCRYPT_CONFIG"
             fi
             
-            log "SUCCESS" "${GREEN}Источник '$source_name' добавлен${NC}"
+            log "SUCCESS" "Источник '$source_name' добавлен"
             
             restart_service "dnscrypt-proxy"
             ;;
         2)
-            echo -e "\n${BLUE}Удаление источника:${NC}"
+            safe_echo "\n${BLUE}Удаление источника:${NC}"
             
             # Получаем список источников
             local sources=$(grep -n "\[sources\.'.*'\]" "$DNSCRYPT_CONFIG" | sed 's/:.*//' | awk '{print $1}')
             
             if [ -z "$sources" ]; then
-                log "ERROR" "${RED}Источники не найдены${NC}"
+                log "ERROR" "Источники не найдены"
                 return 1
             fi
             
@@ -514,16 +514,16 @@ EOL
                 
                 sed -i "${start_line},${end_line}d" "$DNSCRYPT_CONFIG"
                 
-                log "SUCCESS" "${GREEN}Источник '$selected_source' удален${NC}"
+                log "SUCCESS" "Источник '$selected_source' удален"
                 
                 restart_service "dnscrypt-proxy"
             else
-                log "ERROR" "${RED}Неверный выбор${NC}"
+                log "ERROR" "Неверный выбор"
                 return 1
             fi
             ;;
         3)
-            echo -e "\n${BLUE}Доступные серверы:${NC}"
+            safe_echo "\n${BLUE}Доступные серверы:${NC}"
             echo "1) Список DNSCrypt серверов"
             echo "2) Список релеев"
             echo "3) Список ODoH серверов"
@@ -538,14 +538,14 @@ EOL
                 3) list_available_odoh_servers ;;
                 4) list_available_odoh_relays ;;
                 0) return 0 ;;
-                *) log "ERROR" "${RED}Неверный выбор${NC}" ;;
+                *) log "ERROR" "Неверный выбор" ;;
             esac
             ;;
         0)
             return 0
             ;;
         *)
-            log "ERROR" "${RED}Неверный выбор${NC}"
+            log "ERROR" "Неверный выбор"
             return 1
             ;;
     esac
@@ -555,7 +555,7 @@ EOL
 
 # Добавляем функцию выбора серверов по географическим локациям
 configure_geo_servers() {
-    echo -e "\n${BLUE}Выбор DNS серверов по географическому расположению:${NC}"
+    safe_echo "\n${BLUE}Выбор DNS серверов по географическому расположению:${NC}"
     echo "1) Северная Америка (Торонто, Лос-Анджелес)"
     echo "2) Европа (Амстердам, Франкфурт, Париж)"
     echo "3) Азия (Токио, Фуджейра, Сидней)"
@@ -567,7 +567,7 @@ configure_geo_servers() {
     local server_name=""
     case $geo_choice in
         1)
-            echo -e "\n${BLUE}Доступные серверы Северной Америки:${NC}"
+            safe_echo "\n${BLUE}Доступные серверы Северной Америки:${NC}"
             echo "1) dnscry.pt-toronto (Торонто, Канада)"
             echo "2) dnscry.pt-losangeles (Лос-Анджелес, США)"
             echo "0) Назад"
@@ -593,7 +593,7 @@ configure_geo_servers() {
             esac
             ;;
         2)
-            echo -e "\n${BLUE}Доступные серверы Европы:${NC}"
+            safe_echo "\n${BLUE}Доступные серверы Европы:${NC}"
             echo "1) dnscry.pt-amsterdam (Амстердам, Нидерланды)"
             echo "2) dnscry.pt-frankfurt (Франкфурт, Германия)"
             echo "3) dnscry.pt-paris (Париж, Франция)"
@@ -624,7 +624,7 @@ configure_geo_servers() {
             esac
             ;;
         3)
-            echo -e "\n${BLUE}Доступные серверы Азии и Океании:${NC}"
+            safe_echo "\n${BLUE}Доступные серверы Азии и Океании:${NC}"
             echo "1) dnscry.pt-tokyo (Токио, Япония)"
             echo "2) dnscry.pt-fujairah (Фуджейра, ОАЭ)"
             echo "3) dnscry.pt-sydney02 (Сидней, Австралия)"
@@ -655,7 +655,7 @@ configure_geo_servers() {
             esac
             ;;
         4)
-            echo -e "\n${BLUE}Все доступные серверы dnscry.pt:${NC}"
+            safe_echo "\n${BLUE}Все доступные серверы dnscry.pt:${NC}"
             echo "1) dnscry.pt-amsterdam (Амстердам, Нидерланды)"
             echo "2) dnscry.pt-frankfurt (Франкфурт, Германия)"
             echo "3) dnscry.pt-paris (Париж, Франция)"
@@ -738,7 +738,7 @@ change_dns() {
     # Проверка установки DNSCrypt
     if ! check_dnscrypt_installed; then
         log "ERROR" "DNSCrypt-proxy не установлен. Установите его перед настройкой."
-        echo -e "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
+        safe_echo "${YELLOW}Используйте пункт меню 'Установить DNSCrypt'${NC}"
         return 1
     fi
 
@@ -752,7 +752,7 @@ change_dns() {
         # Показать текущие настройки
         check_current_settings
     
-        echo -e "\n${BLUE}Меню настройки DNSCrypt:${NC}"
+        safe_echo "\n${BLUE}Меню настройки DNSCrypt:${NC}"
         echo "1) Настройка серверов по географическому расположению"
         echo "2) Изменить DNS сервер вручную"
         echo "3) Настройки безопасности (DNSSEC, NoLog, NoFilter)"
@@ -772,7 +772,7 @@ change_dns() {
             
             2)
                 # Ручной выбор сервера
-                echo -e "\n${BLUE}Доступные предустановленные серверы:${NC}"
+                safe_echo "\n${BLUE}Доступные предустановленные серверы:${NC}"
                 echo "1) cloudflare (Cloudflare)"
                 echo "2) google (Google DNS)"
                 echo "3) quad9-dnscrypt-ip4-filter-pri (Quad9)"
@@ -789,18 +789,18 @@ change_dns() {
                     3) server_name="['quad9-dnscrypt-ip4-filter-pri']" ;;
                     4) server_name="['adguard-dns']" ;;
                     5)
-                        echo -e "\n${BLUE}Примеры форматов ввода DNS серверов:${NC}"
+                        safe_echo "\n${BLUE}Примеры форматов ввода DNS серверов:${NC}"
                         echo "1. Один сервер: quad9-dnscrypt-ip4-filter-pri"
                         echo "2. Несколько серверов: ['quad9-dnscrypt-ip4-filter-pri', 'cloudflare']"
                         echo "3. С указанием протокола: sdns://... (для DoH/DoT/DNSCrypt серверов)"
-                        echo -e "\nПопулярные серверы:"
+                        safe_echo "\nПопулярные серверы:"
                         echo "- cloudflare           (Cloudflare DNS)"
                         echo "- google               (Google DNS)"
                         echo "- quad9-dnscrypt-ip4-filter-pri  (Quad9 DNS с фильтрацией)"
                         echo "- adguard-dns         (AdGuard DNS с блокировкой рекламы)"
                         echo "- cleanbrowsing-adult (CleanBrowsing с семейным фильтром)"
-                        echo -e "\n${YELLOW}Внимание: Имя сервера должно точно соответствовать записи в resolvers-info.md${NC}"
-                        echo -e "${BLUE}Полный список серверов доступен по адресу:${NC}"
+                        safe_echo "\n${YELLOW}Внимание: Имя сервера должно точно соответствовать записи в resolvers-info.md${NC}"
+                        safe_echo "${BLUE}Полный список серверов доступен по адресу:${NC}"
                         echo "https://github.com/DNSCrypt/dnscrypt-proxy/wiki/Public-resolvers"
                         
                         read -p $'\nВведите имя сервера или массив серверов: ' input_server_name
@@ -840,7 +840,7 @@ change_dns() {
                 ;;
             
             3)
-                echo -e "\n${BLUE}Настройки безопасности:${NC}"
+                safe_echo "\n${BLUE}Настройки безопасности:${NC}"
                 
                 read -p "Включить DNSSEC (проверка криптографических подписей)? (y/n): " dnssec
                 dnssec=$(echo "$dnssec" | tr '[:upper:]' '[:lower:]')
@@ -866,7 +866,7 @@ change_dns() {
                 ;;
                 
             4)
-                echo -e "\n${BLUE}Настройки протоколов:${NC}"
+                safe_echo "\n${BLUE}Настройки протоколов:${NC}"
                 
                 read -p "Использовать серверы IPv4? (y/n): " ipv4
                 ipv4=$(echo "$ipv4" | tr '[:upper:]' '[:lower:]')
@@ -925,7 +925,7 @@ change_dns() {
                 ;;
                 
             *)
-                log "ERROR" "${RED}Неверный выбор${NC}"
+                log "ERROR" "Неверный выбор"
                 ;;
         esac
         

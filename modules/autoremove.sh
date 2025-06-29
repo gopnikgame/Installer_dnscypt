@@ -15,8 +15,8 @@ uninstall_dnscrypt() {
     check_root
     
     # Запрос подтверждения
-    echo -e "${RED}ВНИМАНИЕ: Это действие полностью удалит DNSCrypt и вернет системные настройки DNS в исходное состояние.${NC}"
-    echo -e "${RED}Все файлы конфигурации, логи и компоненты DNSCrypt будут удалены.${NC}"
+    safe_echo "${RED}ВНИМАНИЕ: Это действие полностью удалит DNSCrypt и вернет системные настройки DNS в исходное состояние.${NC}"
+    safe_echo "${RED}Все файлы конфигурации, логи и компоненты DNSCrypt будут удалены.${NC}"
     echo
     read -p "Вы уверены, что хотите продолжить? (y/n): " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -25,7 +25,7 @@ uninstall_dnscrypt() {
     fi
     
     echo
-    echo -e "${YELLOW}Выполняется удаление...${NC}"
+    safe_echo "${YELLOW}Выполняется удаление...${NC}"
     
     # 1. Остановка и отключение службы DNSCrypt
     log "INFO" "Остановка и отключение службы DNSCrypt..."
@@ -158,11 +158,11 @@ EOF
     fi
     
     print_header "УДАЛЕНИЕ ЗАВЕРШЕНО"
-    echo -e "${GREEN}DNSCrypt успешно удален из системы${NC}"
-    echo -e "${GREEN}DNS резолвер восстановлен в стандартное состояние${NC}"
+    safe_echo "${GREEN}DNSCrypt успешно удален из системы${NC}"
+    safe_echo "${GREEN}DNS резолвер восстановлен в стандартное состояние${NC}"
     echo
-    echo -e "${YELLOW}Рекомендуется перезагрузить систему:${NC}"
-    echo -e "${CYAN}sudo reboot${NC}"
+    safe_echo "${YELLOW}Рекомендуется перезагрузить систему:${NC}"
+    safe_echo "${CYAN}sudo reboot${NC}"
     
     return 0
 }
