@@ -70,9 +70,37 @@ if [[ ${#missing_tools[@]} -gt 0 ]]; then
     fi
 fi
 
+# Функция для активации секции anonymized_dns
+enable_anonymized_dns_section() {
+    log "INFO" "Активация секции [anonymized_dns]..."
+    
+    # Проверяем, активна ли уже секция
+    if grep -q "^\[anonymized_dns\]" "$DNSCRYPT_CONFIG"; then
+        log "INFO" "Секция [anonymized_dns] уже активна"
+        return 0
+    fi
+    
+    # Проверяем, есть ли закомментированная секция
+    if grep -q "^#\[anonymized_dns\]" "$DNSCRYPT_CONFIG"; then
+        # Раскомментируем секцию и базовые настройки
+        sed -i 's/^#\[anonymized_dns\]/[anonymized_dns]/' "$DNSCRYPT_CONFIG"
+        sed -i '/^\[anonymized_dns\]/,/^$/s/^#routes = \[/routes = [/' "$DNSCRYPT_CONFIG"
+        sed -i '/^\[anonymized_dns\]/,/^$/s/^#skip_incompatible = false/skip_incompatible = true/' "$DNSCRYPT_CONFIG"
+        log "SUCCESS" "Секция [anonymized_dns] активирована"
+    else
+        # Добавляем новую секцию в конец файла
+        configure_anonymized_dns
+    fi
+    
+    return 0
+}
+
 # Настройка маршрутов для Anonymized DNSCrypt
 configure_anonymized_routes() {
     log "INFO" "Настройка маршрутов для Anonymized DNSCrypt..."
+    
+    # Убеждаемся, что секция активна
+    enable_anonymized_dns_section
     
     safe_echo "\n${BLUE}Настройка маршрутов анонимизации:${NC}"
     echo "Маршруты определяют, через какие релеи будут проходить запросы к определенным серверам."
@@ -267,8 +295,9 @@ replace_anonymized_routes() {
     fi
     
     # Запрашиваем новые маршруты
-    local routes="["
+    local routes_content=""
     local continue_adding="y"
+    local first_route=true
     
     while [[ "${continue_adding,,}" == "y" ]]; do
         safe_echo "\n${BLUE}Доступные DNSCrypt-серверы:${NC}"
@@ -296,75 +325,24 @@ replace_anonymized_routes() {
         # Преобразуем список в формат для маршрута
         local relays=$(echo "$relay_list" | tr ',' ' ' | sed "s/\([a-zA-Z0-9_*-]*\)/'\1'/g" | tr ' ' ',')
         
-        if [ "$routes" != "[" ]; then
-            routes+=", "
+        if [ "$first_route" = false ]; then
+            routes_content+=",\n"
         fi
         
-        routes+="\n    { server_name='$server_name', via=[$relays] }"
+        routes_content+="    { server_name='$server_name', via=[$relays] }"
+        first_route=false
         
         safe_echo "\n${YELLOW}Добавить еще один маршрут? (y/n):${NC}"
         read -p "> " continue_adding
     done
     
-    routes+="\n]"
+    # Обновляем маршруты в конфигурации с правильным форматированием
+    local new_routes_section="routes = [\n$routes_content\n]"
     
-    # Обновляем маршруты в конфигурации
-    sed -i "/routes = \[/,/\]/c\\routes = $routes" "$DNSCRYPT_CONFIG"
+    # Заменяем секцию routes
+    sed -i "/routes = \[/,/\]/c\\$new_routes_section" "$DNSCRYPT_CONFIG"
     
     log "SUCCESS" "Все маршруты успешно заменены"
-}
-
-# Добавление источников ODoH
-add_odoh_sources() {
-    log "INFO" "Добавление источников для ODoH..."
-    
-    # Проверяем наличие секции [sources]
-    if ! grep -q "\[sources\]" "$DNSCRYPT_CONFIG"; then
-        log "ERROR" "Секция [sources] не найдена в конфигурации"
-        return 1
-    fi
-    
-    # Находим последнюю секцию sources для вставки
-    local last_sources_line=$(grep -n "\[sources." "$DNSCRYPT_CONFIG" | tail -n1 | cut -d':' -f1)
-    
-    if [ -z "$last_sources_line" ]; then
-        # Если нет других секций sources, вставляем после основной [sources]
-        local sources_line=$(grep -n "\[sources\]" "$DNSCRYPT_CONFIG" | cut -d':' -f1)
-        last_sources_line=$sources_line
-    fi
-    
-    # Добавляем источники ODoH серверов, если их нет
-    if ! grep -q "\[sources.odoh-servers\]" "$DNSCRYPT_CONFIG"; then
-        local insert_line=$((last_sources_line + 10))
-        sed -i "${insert_line}i\\
-\\
-  [sources.odoh-servers]\\
-  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/odoh-servers.md', 'https://download.dnscrypt.info/resolvers-list/v3/odoh-servers.md']\\
-  cache_file = 'odoh-servers.md'\\
-  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'\\
-  refresh_delay = 72" "$DNSCRYPT_CONFIG"
-        
-        log "SUCCESS" "Добавлен источник ODoH-серверов"
-        
-        # Обновляем последнюю секцию sources
-        last_sources_line=$(grep -n "\[sources." "$DNSCRYPT_CONFIG" | tail -n1 | cut -d':' -f1)
-    fi
-    
-    # Добавляем источники ODoH релеев, если их нет
-    if ! grep -q "\[sources.odoh-relays\]" "$DNSCRYPT_CONFIG"; then
-        local insert_line=$((last_sources_line + 10))
-        sed -i "${insert_line}i\\
-\\
-  [sources.odoh-relays]\\
-  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/odoh-relays.md', 'https://download.dnscrypt.info/resolvers-list/v3/odoh-relays.md']\\
-  cache_file = 'odoh-relays.md'\\
-  minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'\\
-  refresh_delay = 72" "$DNSCRYPT_CONFIG"
-        
-        log "SUCCESS" "Добавлен источник ODoH-релеев"
-    fi
-    
-    return 0
 }
 
 # Настройка маршрутов для ODoH
@@ -384,8 +362,7 @@ configure_odoh_routes() {
     # Проверяем, включены ли ODoH серверы
     if ! grep -q "odoh_servers = true" "$DNSCRYPT_CONFIG"; then
         log "WARN" "Поддержка ODoH не включена. Включаем..."
-        sed -i "s/odoh_servers = .*/odoh_servers = true/" "$DNSCRYPT_CONFIG" 2>/dev/null || \
-        sed -i "/doh_servers = /a odoh_servers = true" "$DNSCRYPT_CONFIG" 2>/dev/null
+        add_config_option "$DNSCRYPT_CONFIG" "" "odoh_servers" "true"
     fi
     
     safe_echo "\n${BLUE}Настройка маршрутов ODoH:${NC}"
@@ -466,11 +443,8 @@ add_anonymized_route_for_odoh() {
     local server_name="$1"
     local relays="$2"
     
-    # Создаем секцию anonymized_dns, если она отсутствует
-    if ! grep -q "\[anonymized_dns\]" "$DNSCRYPT_CONFIG"; then
-        log "INFO" "Создание секции anonymized_dns для ODoH..."
-        configure_anonymized_dns
-    fi
+    # Убеждаемся, что секция anonymized_dns существует
+    enable_anonymized_dns_section
     
     # Преобразуем список релеев в формат для маршрута
     local relays_formatted=$(echo "$relays" | tr ',' ' ' | sed "s/\([a-zA-Z0-9_*-]*\)/'\1'/g" | tr ' ' ',')
@@ -490,9 +464,10 @@ configure_additional_anon_settings() {
     safe_echo "\n${BLUE}Дополнительные настройки анонимного DNS:${NC}"
     echo "1) Настройка пропуска несовместимых серверов"
     echo "2) Настройка логирования и отладки"
+    echo "3) Настройка прямого получения сертификатов"
     echo "0) Отмена"
     
-    read -p "Выберите опцию (0-2): " additional_option
+    read -p "Выберите опцию (0-3): " additional_option
     
     case $additional_option in
         1)
@@ -503,21 +478,13 @@ configure_additional_anon_settings() {
             
             read -p "Включить пропуск несовместимых серверов? (y/n): " skip_incompatible
             
+            enable_anonymized_dns_section
+            
             if [[ "${skip_incompatible,,}" == "y" ]]; then
-                if grep -q "skip_incompatible" "$DNSCRYPT_CONFIG"; then
-                    sed -i "s/skip_incompatible = .*/skip_incompatible = true/" "$DNSCRYPT_CONFIG"
-                else
-                    sed -i "/\[anonymized_dns\]/a skip_incompatible = true" "$DNSCRYPT_CONFIG"
-                fi
-                
+                add_config_option "$DNSCRYPT_CONFIG" "anonymized_dns" "skip_incompatible" "true"
                 log "SUCCESS" "Пропуск несовместимых серверов включен"
             else
-                if grep -q "skip_incompatible" "$DNSCRYPT_CONFIG"; then
-                    sed -i "s/skip_incompatible = .*/skip_incompatible = false/" "$DNSCRYPT_CONFIG"
-                else
-                    sed -i "/\[anonymized_dns\]/a skip_incompatible = false" "$DNSCRYPT_CONFIG"
-                fi
-                
+                add_config_option "$DNSCRYPT_CONFIG" "anonymized_dns" "skip_incompatible" "false"
                 log "SUCCESS" "Пропуск несовместимых серверов отключен"
             fi
             ;;
@@ -545,6 +512,24 @@ configure_additional_anon_settings() {
                 log "ERROR" "Неверный уровень логирования"
             fi
             ;;
+        3)
+            # Настройка прямого получения сертификатов
+            safe_echo "\n${BLUE}Прямое получение сертификатов:${NC}"
+            echo "Если включено, для несовместимых серверов публичные сертификаты"
+            echo "будут получены напрямую, но сами запросы все равно пойдут через релеи."
+            
+            read -p "Включить прямое получение сертификатов? (y/n): " direct_cert_fallback
+            
+            enable_anonymized_dns_section
+            
+            if [[ "${direct_cert_fallback,,}" == "y" ]]; then
+                add_config_option "$DNSCRYPT_CONFIG" "anonymized_dns" "direct_cert_fallback" "true"
+                log "SUCCESS" "Прямое получение сертификатов включено"
+            else
+                add_config_option "$DNSCRYPT_CONFIG" "anonymized_dns" "direct_cert_fallback" "false"
+                log "SUCCESS" "Прямое получение сертификатов отключено"
+            fi
+            ;;
         0)
             return 0
             ;;
@@ -560,6 +545,53 @@ configure_additional_anon_settings() {
     return 0
 }
 
+# Проверка и исправление конфигурации анонимного DNS
+fix_anonymized_dns_config() {
+    log "INFO" "Проверка и исправление конфигурации анонимного DNS..."
+    
+    safe_echo "\n${BLUE}Проверка настроек анонимного DNS:${NC}"
+    
+    # Проверка наличия источника релеев
+    if ! grep -q "\[sources.relays\]" "$DNSCRYPT_CONFIG" && ! grep -q "\[sources.'relays'\]" "$DNSCRYPT_CONFIG"; then
+        log "WARN" "Источник релеев не найден. Добавление..."
+        add_relays_source
+    else
+        log "SUCCESS" "Источник релеев настроен"
+    fi
+    
+    # Проверка включения DNSCrypt-серверов
+    if ! grep -q "dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
+        log "WARN" "DNSCrypt-серверы не включены. Исправление..."
+        add_config_option "$DNSCRYPT_CONFIG" "" "dnscrypt_servers" "true"
+    else
+        log "SUCCESS" "DNSCrypt-серверы включены"
+    fi
+    
+    # Проверка секции anonymized_dns
+    if ! grep -q "^\[anonymized_dns\]" "$DNSCRYPT_CONFIG"; then
+        log "WARN" "Секция [anonymized_dns] не активна. Исправление..."
+        enable_anonymized_dns_section
+    else
+        log "SUCCESS" "Секция [anonymized_dns] активна"
+    fi
+    
+    # Проверка маршрутов
+    if ! grep -A 10 "\[anonymized_dns\]" "$DNSCRYPT_CONFIG" | grep -q "routes.*="; then
+        log "WARN" "Маршруты не настроены. Добавление базового маршрута..."
+        add_route_to_config "{ server_name='*', via=['*'] }"
+        log "INFO" "Добавлен базовый маршрут с автоматическим выбором релеев"
+    else
+        log "SUCCESS" "Маршруты настроены"
+    fi
+    
+    log "SUCCESS" "Проверка конфигурации анонимного DNS завершена"
+    
+    # Перезапуск службы
+    restart_service "$DNSCRYPT_SERVICE"
+    
+    return 0
+}
+
 # Основное меню управления анонимным DNS
 main_menu() {
     while true; do
@@ -570,10 +602,11 @@ main_menu() {
         echo "4) Настроить маршруты для анонимизации"
         echo "5) Тестировать время отклика серверов"
         echo "6) Дополнительные настройки анонимизации"
-        echo "7) Перезапустить DNSCrypt-proxy"
+        echo "7) Исправить конфигурацию анонимного DNS"
+        echo "8) Перезапустить DNSCrypt-proxy"
         echo "0) Выход"
         
-        read -p "Выберите опцию (0-7): " option
+        read -p "Выберите опцию (0-8): " option
         
         case $option in
             1)
@@ -599,6 +632,10 @@ main_menu() {
                 configure_additional_anon_settings
                 ;;
             7)
+                backup_config "$DNSCRYPT_CONFIG" "dnscrypt-config"
+                fix_anonymized_dns_config
+                ;;
+            8)
                 restart_service "$DNSCRYPT_SERVICE"
                 ;;
             0)

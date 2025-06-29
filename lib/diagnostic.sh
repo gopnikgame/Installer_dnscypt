@@ -366,9 +366,9 @@ check_dns_leak() {
                 
                 # Сравнение IP адресов
                 if [ "$dns_ip" = "$dnscrypt_ip" ]; then
-                    safe_echo "${GREEN}   IP адреса совпадают - утечек не обнаружено${NC}"
+                    safe_echo "   ${GREEN}IP адреса совпадают - утечек не обнаружено${NC}"
                 else
-                    safe_echo "${YELLOW}   IP адреса различаются - возможна утечка DNS${NC}"
+                    safe_echo "   ${YELLOW}IP адреса различаются - возможна утечка DNS${NC}"
                 fi
             fi
         fi
@@ -395,15 +395,15 @@ check_dns_leak() {
         local system_result=$(timeout 5 dig "$test_domain" +short 2>/dev/null)
         
         if [ -n "$dnscrypt_result" ]; then
-            echo "   DNSCrypt резолвинг для $test_domain: ${GREEN}Работает${NC}"
+            safe_echo "   DNSCrypt резолвинг для $test_domain: ${GREEN}Работает${NC}"
         else
-            echo "   DNSCrypt резолвинг для $test_domain: ${RED}Не работает${NC}"
+            safe_echo "   DNSCrypt резолвинг для $test_domain: ${RED}Не работает${NC}"
         fi
         
         if [ -n "$system_result" ]; then
-            echo "   Системный резолвинг для $test_domain: ${GREEN}Работает${NC}"
+            safe_echo "   Системный резолвинг для $test_domain: ${GREEN}Работает${NC}"
         else
-            echo "   Системный резолвинг для $test_domain: ${RED}Не работает${NC}"
+            safe_echo "   Системный резолвинг для $test_domain: ${RED}Не работает${NC}"
         fi
     else
         safe_echo "${RED}   DNSCrypt не запущен, проверка невозможна${NC}"
