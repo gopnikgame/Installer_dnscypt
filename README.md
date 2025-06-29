@@ -214,6 +214,7 @@ sudo dnscrypt_manager или sudo dnscrypt-manager
 ---
 
 ## 📁 Архитектура проекта
+```plaintext
 Installer_dnscypt/
 ├── 📜 main.sh                          # Главный скрипт управления
 ├── ⚡ quick_install.sh                 # Скрипт быстрой установки
@@ -233,6 +234,7 @@ Installer_dnscypt/
 │   ├── 🎭 anonymized_dns.sh            # Функции анонимного DNS
 │   └── 🩺 diagnostic.sh                # Диагностические инструменты
 └── 📖 README.md                        # Документация проекта
+```
 
 ### 🏗️ Принципы архитектуры
 
