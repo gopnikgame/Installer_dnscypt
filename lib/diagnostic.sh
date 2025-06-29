@@ -281,9 +281,8 @@ check_dns_security() {
         safe_echo "${RED}Служба DNSCrypt не запущена${NC}"
     fi
     
-    safe_echo "\n${BLUE}Тест утечки DNS:${NC}"
-    echo "Проверьте, какие DNS запросы видны вашему провайдеру, с помощью сайта:"
-    safe_echo "${YELLOW}https://www.dnsleaktest.com/${NC}"
+    safe_echo "\n${BLUE}Проверка DNS-утечек:${NC}"
+    check_dns_leak
     
     safe_echo "\n${BLUE}Настройки приватности в DNSCrypt:${NC}"
     if [ -f "$DNSCRYPT_CONFIG" ]; then
@@ -301,6 +300,122 @@ check_dns_security() {
     else
         safe_echo "${RED}Конфигурационный файл не найден${NC}"
     fi
+    
+    return 0
+}
+
+# Проверка DNS-утечек
+check_dns_leak() {
+    log "INFO" "Проверка DNS-утечек..."
+    
+    # Проверяем наличие необходимых утилит
+    local missing_tools=""
+    
+    if ! command -v curl &>/dev/null; then
+        missing_tools="$missing_tools curl"
+    fi
+    
+    if ! command -v dig &>/dev/null; then
+        missing_tools="$missing_tools dnsutils"
+    fi
+    
+    if [ -n "$missing_tools" ]; then
+        safe_echo "${YELLOW}Установка необходимых утилит:$missing_tools${NC}"
+        apt-get update >/dev/null 2>&1
+        apt-get install -y$missing_tools >/dev/null 2>&1
+    fi
+    
+    # Проверка IP и провайдера
+    safe_echo "\n${BLUE}● IP и Провайдер:${NC}"
+    
+    local ip_data=$(timeout 10 curl -s "https://ipleak.net/json/" 2>/dev/null)
+    
+    if [ -n "$ip_data" ]; then
+        if command -v jq &>/dev/null; then
+            echo "$ip_data" | jq -r '"   IP: \(.ip)\n   Страна: \(.country_name)\n   Провайдер: \(.isp)"' 2>/dev/null
+        else
+            # Если jq не установлен, используем grep/sed
+            local ip=$(echo "$ip_data" | grep -o '"ip":"[^"]*' | sed 's/"ip":"//' | head -1)
+            local country=$(echo "$ip_data" | grep -o '"country_name":"[^"]*' | sed 's/"country_name":"//' | head -1)
+            local isp=$(echo "$ip_data" | grep -o '"isp":"[^"]*' | sed 's/"isp":"//' | head -1)
+            
+            [ -n "$ip" ] && echo "   IP: $ip"
+            [ -n "$country" ] && echo "   Страна: $country"
+            [ -n "$isp" ] && echo "   Провайдер: $isp"
+        fi
+    else
+        safe_echo "${RED}   Не удалось получить данные с ipleak.net${NC}"
+    fi
+    
+    # Проверка DNS-серверов
+    safe_echo "\n${BLUE}● DNS-серверы:${NC}"
+    
+    if command -v dig &>/dev/null; then
+        local dns_ip=$(timeout 10 dig +short myip.opendns.com @resolver1.opendns.com 2>/dev/null)
+        if [ -n "$dns_ip" ]; then
+            echo "   DNS определяет ваш IP как: $dns_ip"
+        else
+            safe_echo "${RED}   Не удалось определить DNS IP через OpenDNS${NC}"
+        fi
+        
+        # Проверка через DNSCrypt, если активен
+        if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+            local dnscrypt_ip=$(timeout 10 dig +short myip.opendns.com @127.0.0.1 2>/dev/null)
+            if [ -n "$dnscrypt_ip" ]; then
+                echo "   DNSCrypt определяет ваш IP как: $dnscrypt_ip"
+                
+                # Сравнение IP адресов
+                if [ "$dns_ip" = "$dnscrypt_ip" ]; then
+                    safe_echo "${GREEN}   IP адреса совпадают - утечек не обнаружено${NC}"
+                else
+                    safe_echo "${YELLOW}   IP адреса различаются - возможна утечка DNS${NC}"
+                fi
+            fi
+        fi
+    fi
+    
+    echo "   Используемые DNS-серверы системой:"
+    if [ -f "/etc/resolv.conf" ]; then
+        grep "nameserver" /etc/resolv.conf | sed 's/nameserver/   /' 2>/dev/null || safe_echo "${RED}   Нет настроенных DNS серверов${NC}"
+    else
+        safe_echo "${RED}   Не удалось найти файл /etc/resolv.conf${NC}"
+    fi
+    
+    # Дополнительная проверка через systemd-resolved
+    if command -v resolvectl &>/dev/null; then
+        echo "   Настройки systemd-resolved:"
+        resolvectl status 2>/dev/null | grep "DNS Server" | sed 's/^/   /' || true
+    fi
+    
+    # Проверка текущих DNS запросов
+    safe_echo "\n${BLUE}● Тестирование DNS запросов:${NC}"
+    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+        local test_domain="example.com"
+        local dnscrypt_result=$(timeout 5 dig @127.0.0.1 "$test_domain" +short 2>/dev/null)
+        local system_result=$(timeout 5 dig "$test_domain" +short 2>/dev/null)
+        
+        if [ -n "$dnscrypt_result" ]; then
+            echo "   DNSCrypt резолвинг для $test_domain: ${GREEN}Работает${NC}"
+        else
+            echo "   DNSCrypt резолвинг для $test_domain: ${RED}Не работает${NC}"
+        fi
+        
+        if [ -n "$system_result" ]; then
+            echo "   Системный резолвинг для $test_domain: ${GREEN}Работает${NC}"
+        else
+            echo "   Системный резолвинг для $test_domain: ${RED}Не работает${NC}"
+        fi
+    else
+        safe_echo "${RED}   DNSCrypt не запущен, проверка невозможна${NC}"
+    fi
+    
+    # Предупреждение и ссылка на веб-тест
+    safe_echo "\n${BLUE}● Дополнительная проверка утечек DNS:${NC}"
+    echo "   Для полной проверки используйте веб-сайт:"
+    safe_echo "   ${YELLOW}https://www.dnsleaktest.com/${NC}"
+    echo ""
+    safe_echo "${YELLOW}   ⚠️  ВНИМАНИЕ: Сайт отобразит данные и утечки для используемого${NC}"
+    safe_echo "${YELLOW}   браузера. В других приложениях и браузерах результат может отличаться.${NC}"
     
     return 0
 }
