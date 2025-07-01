@@ -1,69 +1,69 @@
-USA
-Detroit
+[USA]
+"Detroit"
 dnscry.pt-detroit-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Portland
+"Portland"
 dnscry.pt-portland-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Piscataway
+"Piscataway"
 plan9dns-nj						no filters | no logs | DNSSEC | IPv4 server | DNSCrypt
-Miami
+"Miami"
 dnscry.pt-miami-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 plan9dns-fl						no filters | no logs | DNSSEC | IPv4 server | DNSCrypt
-Los Angeles
+"Los Angeles"
 dnscry.pt-losangeles-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 216.73.156.52
 dnscry.pt-losangeles02-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 104.200.67.194
-Chicago
+"Chicago"
 dnscry.pt-chicago-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Jacksonville
+"Jacksonville"
 dnscry.pt-jacksonville-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Seattle
+"Seattle"
 dnscry.pt-seattle-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Spokane
+"Spokane"
 dnscry.pt-spokane-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Kansas City
+"Kansas City"
 dnscry.pt-kansascity-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Santa Clara
+"Santa Clara"
 dnscry.pt-santaclara-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Tampa
+"Tampa"
 dnscry.pt-tampa-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Flint
+"Flint"
 dnscry.pt-flint-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Allentown
+"Allentown"
 dnscry.pt-allentown-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Denver
+"Denver"
 dnscry.pt-denver-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Durham
+"Durham"
 dnscry.pt-durham-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Grand Rapids
+"Grand Rapids"
 dnscry.pt-grandrapids-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Las Vegas
+"Las Vegas"
 dnscry.pt-lasvegas-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Fremont
+"Fremont"
 dnscry.pt-fremont-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Ashburn
+"Ashburn"
 dnscry.pt-ashburn-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Dallas
+"Dallas"
 dnscry.pt-dallas-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Atlanta
+"Atlanta"
 dnscry.pt-atlanta-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Philadelphia
+"Philadelphia"
 dnscry.pt-philadelphia-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Salt Lake City
+"Salt Lake City"
 dnscry.pt-saltlakecity-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Taos
+"Taos"
 dnscry.pt-taos-ipv4				no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Liberty Lake
+"Liberty Lake"
 dnscry.pt-libertylake-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Port Edwards
+"Port Edwards"
 dnscry.pt-portedwards-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Ottoville
+"Ottoville"
 dnscry.pt-ottoville-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Redditch
+"Redditch"
 dnscry.pt-redditch-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Coventry
+"Coventry"
 dnscry.pt-coventry-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-JAPAN
-Tokyo
+[JAPAN]
+"Tokyo"
 dnscry.pt-tokyo-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 45.67.86.123
 dnscry.pt-tokyo02-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 103.179.45.6
 saldns01-conoha-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 163.44.124.204
@@ -71,206 +71,206 @@ saldns02-conoha-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 1
 saldns03-conoha-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 160.251.168.25
 jp.tiar.app						no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 172.104.93.80
 
-FRANCE
-Paris
+[FRANCE]
+"Paris"
 dnscry.pt-paris-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 89.117.2.17
 scaleway-fr						  filter  | no logs | DNSSEC | IPv4 server | DNSCrypt | 212.47.228.136
 sfw.scaleway-fr					  filter  | no logs | DNSSEC | IPv4 server | DNSCrypt | 163.172.180.125
 
-GERMANY
-Frankfurt
+[GERMANY]
+"Frankfurt"
 dnscry.pt-frankfurt-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 194.50.19.150
 dnscry.pt-frankfurt02-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 45.147.51.123
-Nuremberg
+"Nuremberg"
 dnscry.pt-nuremberg-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 digitalprivacy.diy-dnscrypt-ipv4	no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Düsseldorf
+"Düsseldorf"
 dnscry.pt-dusseldorf-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Munich
+"Munich"
 dnscry.pt-munich-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-UK
-London
+[UK]
+"London"
 dnscry.pt-london-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 dnscrypt.uk-ipv4				no logs | DNSSEC | IPv4 server | DNSCrypt
 v.dnscrypt.uk-ipv4				no logs | DNSSEC | IPv4 server | DNSCrypt
-Manchester
+"Manchester"
 dnscry.pt-manchester-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-CANADA
-Montreal
+[CANADA]
+"Montreal"
 dnscry.pt-montreal-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 147.189.136.183
-Toronto
+"Toronto"
 dnscry.pt-toronto-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 23.134.89.23
-Vancouver
+"Vancouver"
 dnscry.pt-vancouver-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 23.154.81.92
-Calgary
+"Calgary"
 dnscry.pt-calgary-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 23.133.64.121
-Halifax
+"Halifax"
 dnscry.pt-halifax-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 23.191.80.72
 dnscrypt.ca-ipv4				no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 185.111.188.46
 
-AUSTRALIA
-Sydney
+[AUSTRALIA]
+"Sydney"
 dnscry.pt-sydney-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 84.33.15.100
 dnscry.pt-sydney02-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 195.114.14.74
-Brisbane
+"Brisbane"
 dnscry.pt-brisbane-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 userspace-australia				no logs | IPv4 | DNSCrypt | Filtered
 
-NETHERLANDS
-Amsterdam
+[NETHERLANDS]
+"Amsterdam"
 dnscry.pt-amsterdam-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 198.140.141.46
 dnscry.pt-amsterdam02-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 45.86.162.110
 scaleway-ams					no logs | DNSSEC | IPv4 server | DNSCrypt | 51.15.122.250
-Naaldwijk
+"Naaldwijk"
 dnscry.pt-naaldwijk-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-SWEDEN
-Stockholm
+[SWEDEN]
+"Stockholm"
 dnscry.pt-stockholm-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Hudiksvall
+"Hudiksvall"
 dnscry.pt-hudiksvall-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-SWITZERLAND
-Geneva
+[SWITZERLAND]
+"Geneva"
 dnscry.pt-geneva-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 ibksturm						no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-SINGAPORE
-Singapore
+[SINGAPORE]
+"Singapore"
 dnscry.pt-singapore02-ipv4		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 blahdns-sg-dnscrypt-v4			no logs | filters | DNSSEC | IPv4 server | DNSCrypt
 
-HONG KONG
-Hong Kong
+[HONG KONG]
+"Hong Kong"
 dnscry.pt-hongkong-ipv4    		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 dnscry.pt-hongkong02-ipv4  		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-INDIA
-Mumbai
+[INDIA]
+"Mumbai"
 dnscry.pt-mumbai-ipv4      		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Bengaluru
+"Bengaluru"
 dnscry.pt-bengaluru-ipv4   		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-SOUTH KOREA
-Seoul
+[SOUTH KOREA]
+"Seoul"
 dnscry.pt-seoul-ipv4       		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-VIETNAM
-Hanoi
+[VIETNAM]
+"Hanoi"
 dnscry.pt-hanoi-ipv4       		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
-Ho Chi Minh City
+"Ho Chi Minh City"
 dnscry.pt-hochiminhcity-ipv4 	no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-RUSSIA
-Moscow
+[RUSSIA]
+"Moscow"
 dnscry.pt-moscow-ipv4      		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt | 93.183.105.109
 
-UKRAINE
-Kyiv
+[UKRAINE]
+"Kyiv"
 dnscry.pt-kyiv-ipv4        		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-GEORGIA
-Tbilisi
+[GEORGIA]
+"Tbilisi"
 dnscry.pt-tbilisi-ipv4     		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-ARMENIA
-Yerevan
+[ARMENIA]
+"Yerevan"
 dnscry.pt-yerevan-ipv4     		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-SOUTH AFRICA
-Johannesburg
+[SOUTH AFRICA]
+"Johannesburg"
 dnscry.pt-johannesburg-ipv4 	no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-BRAZIL
-Sao Paulo
+[BRAZIL]
+"Sao Paulo"
 dnscry.pt-saopaulo-ipv4    		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-MEXICO
-Mexico City
+[MEXICO]
+"Mexico City"
 plan9dns-mx               		no filters | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-PERU
-Lima
+[PERU]
+"Lima"
 dnscry.pt-lima02-ipv4      		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-CHILE
-Valdivia
+[CHILE]
+"Valdivia"
 dnscry.pt-valdivia-ipv4    		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-NIGERIA
-Lagos
+[NIGERIA]
+"Lagos"
 dnscry.pt-lagos-ipv4       		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-PAKISTAN
-Islamabad
+[PAKISTAN]
+"Islamabad"
 dnscry.pt-islamabad-ipv4   		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-MALAYSIA
-Johor
+[MALAYSIA]
+"Johor"
 dnscry.pt-johor-ipv4       		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-NEW ZEALAND
-Auckland
+[NEW ZEALAND]
+"Auckland"
 dnscry.pt-auckland-ipv4    		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-FINLAND
-Helsinki
+[FINLAND]
+"Helsinki"
 dnscry.pt-helsinki-ipv4    		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 nwps.fi                   		no filters | no logs | DNSSEC | IPv4 server | DNSCrypt
-Tuusula
+"Tuusula"
 dnscry.pt-tuusula-ipv4     		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-ESTONIA
-Tallinn
+[ESTONIA]
+"Tallinn"
 dnscry.pt-tallinn-ipv4     		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-LATVIA
-Riga
+[LATVIA]
+"Riga"
 dnscry.pt-riga-ipv4        		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-LITHUANIA
-Vilnius
+[LITHUANIA]
+"Vilnius"
 dnscry.pt-vilnius-ipv4     		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-BULGARIA
-Sofia
+[BULGARIA]
+"Sofia"
 dnscry.pt-sofia-ipv4       		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-MOLDOVA
-Chisinau
+[MOLDOVA]
+"Chisinau"
 dnscry.pt-chisinau-ipv4    		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-SERBIA
-Belgrade
+[SERBIA]
+"Belgrade"
 cs-serbia                 		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-GREECE
-Athens
+[GREECE]
+"Athens"
 dnscry.pt-athens-ipv4      		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-DENMARK
-Copenhagen
+[DENMARK]
+"Copenhagen"
 dnscry.pt-copenhagen-ipv4  		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-NORWAY
-Sandefjord
+[NORWAY]
+"Sandefjord"
 dnscry.pt-sandefjord-ipv4  		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-ICELAND
-Hafnarfjordur
+[ICELAND]
+"Hafnarfjordur"
 dnscry.pt-hafnarfjordur-ipv4 	no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-LUXEMBOURG
-Luxembourg
+[LUXEMBOURG]
+"Luxembourg"
 dnscry.pt-luxembourg-ipv4  		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-IRELAND
-Dublin
+[IRELAND]
+"Dublin"
 dnscry.pt-dublin-ipv4      		no filter | no logs | DNSSEC | IPv4 server | DNSCrypt
 
-ANYCAST SERVERS
+[ANYCAST SERVERS]
 quad9-dnscrypt-ip4-filter-pri    			no logs | DNSSEC | filtered | IPv4 server | DNSCrypt | 149.112.112.9
 quad9-dnscrypt-ip4-filter-ecs-pri 			no logs | DNSSEC | filtered | IPv4 server | DNSCrypt | 149.112.112.11
 quad9-dnscrypt-ip4-nofilter-pri  			no logs | no filter | --------- | IPv4 server | DNSCrypt | 149.112.112.10
