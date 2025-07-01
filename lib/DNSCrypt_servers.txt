@@ -1,3 +1,7 @@
+#[country]
+#"city"
+# servername      		no filter | no logs | DNSSEC | IPv4 | Protocol | Addresses
+
 [USA]
 "Detroit"
 dnscry.pt-detroit-ipv4			no filter | no logs | DNSSEC | IPv4 server | DNSCrypt

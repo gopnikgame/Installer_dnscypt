@@ -1,3 +1,7 @@
+#[country]
+#"city"
+# servername      		no filter | no logs | DNSSEC | IPv4 | Protocol | Addresses
+
 [AUSTRIA]
 "Vienna"
 anon-cs-austria      Anonymized DNS relay | DNSCrypt
