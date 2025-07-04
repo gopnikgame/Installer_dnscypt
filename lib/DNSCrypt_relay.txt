@@ -4,15 +4,15 @@
 
 [AUSTRIA]
 "Vienna"
-anon-cs-austria      Anonymized DNS relay | DNSCrypt
+anon-cs-austria      Anonymized DNS relay | DNSCrypt | 94.198.41.235
 
 [BELGIUM]
 "Brussels"
-anon-cs-belgium      Anonymized DNS relay | DNSCrypt
+anon-cs-belgium      Anonymized DNS relay | DNSCrypt | 37.120.236.11
 
 [BRAZIL]
 "Sao Paulo"
-anon-cs-brazil       Anonymized DNS relay | DNSCrypt
+anon-cs-brazil       Anonymized DNS relay | DNSCrypt | 177.54.145.131
 
 [CANADA]
 "Montreal"
@@ -22,10 +22,10 @@ anon-cs-vancouver    Anonymized DNS relay | DNSCrypt | 196.240.79.163
 
 [CZECH REPUBLIC]
 "Prague"
-anon-cs-czech        Anonymized DNS relay | DNSCrypt
+anon-cs-czech        Anonymized DNS relay | DNSCrypt | 217.138.220.243
 
 [FINLAND]
-anon-cs-finland      Anonymized DNS relay | DNSCrypt
+anon-cs-finland      Anonymized DNS relay | DNSCrypt | 83.143.242.43
 
 [FRANCE]
 anon-cs-fr           Anonymized DNS relay | DNSCrypt | 163.172.34.56
@@ -45,11 +45,11 @@ anon-digitalprivacy.diy-ipv4  Anonymized DNS relay | DNSCrypt | 37.221.194.84
 
 [HUNGARY]
 "Budapest"
-anon-cs-hungary      Anonymized DNS relay | DNSCrypt
+anon-cs-hungary      Anonymized DNS relay | DNSCrypt | 86.106.74.219
 
 [ITALY]
 "Milan"
-anon-cs-milan        Anonymized DNS relay | DNSCrypt
+anon-cs-milan        Anonymized DNS relay | DNSCrypt | 217.138.219.219
 
 [JAPAN]
 "Tokyo"
@@ -65,66 +65,66 @@ anon-cs-nl           Anonymized DNS relay | DNSCrypt | 185.107.80.84
 
 [NORWAY]
 "Oslo"
-anon-cs-norway       Anonymized DNS relay | DNSCrypt
+anon-cs-norway       Anonymized DNS relay | DNSCrypt | 91.219.215.227
 
 [POLAND]
 "Warsaw"
-anon-cs-poland       Anonymized DNS relay | DNSCrypt
+anon-cs-poland       Anonymized DNS relay | DNSCrypt | 37.120.211.91
 
 [PORTUGAL]
-anon-cs-pt           Anonymized DNS relay | DNSCrypt
+anon-cs-pt           Anonymized DNS relay | DNSCrypt | 91.205.230.224
 
 [ROMANIA]
-anon-cs-ro           Anonymized DNS relay | DNSCrypt
+anon-cs-ro           Anonymized DNS relay | DNSCrypt | 146.70.66.227
 
 [SERBIA]
 "Belgrade"
-anon-cs-serbia       Anonymized DNS relay | DNSCrypt
+anon-cs-serbia       Anonymized DNS relay | DNSCrypt | 37.120.193.219
 
 [SINGAPORE]
-anon-cs-singapore    Anonymized DNS relay | DNSCrypt
-anon-tiarap          Anonymized DNS relay | DNSCrypt
+anon-cs-singapore    Anonymized DNS relay | DNSCrypt | 37.120.151.11
+anon-tiarap          Anonymized DNS relay | DNSCrypt | 174.138.29.175
 
 [SOUTH KOREA]
-anon-cs-sk           Anonymized DNS relay | DNSCrypt
+anon-cs-sk           Anonymized DNS relay | DNSCrypt | 108.181.50.218
 
 [SPAIN]
 "Barcelona"
-anon-cs-barcelona    Anonymized DNS relay | DNSCrypt
+anon-cs-barcelona    Anonymized DNS relay | DNSCrypt | 37.120.142.115
 
 [SWEDEN]
-anon-cs-swe          Anonymized DNS relay | DNSCrypt
+anon-cs-swe          Anonymized DNS relay | DNSCrypt | 128.127.104.108
 
 [SWITZERLAND]
-anon-cs-ch           Anonymized DNS relay | DNSCrypt
-anon-dnswarden-swiss Anonymized DNS relay | DNSCrypt
+anon-cs-ch           Anonymized DNS relay | DNSCrypt | 190.211.255.227
+anon-dnswarden-swiss Anonymized DNS relay | DNSCrypt | 188.244.117.114
 
 [UK]
 "London"
-anon-cs-london       Anonymized DNS relay | DNSCrypt
-anon-dnscrypt.uk-ipv4  Anonymized DNS relay | DNSCrypt
+anon-cs-london       Anonymized DNS relay | DNSCrypt | 78.129.248.67
+anon-dnscrypt.uk-ipv4  Anonymized DNS relay | DNSCrypt | 165.232.32.95
 "Manchester"
-anon-cs-manchester   Anonymized DNS relay | DNSCrypt
+anon-cs-manchester   Anonymized DNS relay | DNSCrypt | 195.12.48.171
 
 [USA]
 "Atlanta"
-anon-cs-ga           Anonymized DNS relay | DNSCrypt
+anon-cs-ga           Anonymized DNS relay | DNSCrypt | 130.195.212.211
 "Chicago"
-anon-cs-il           Anonymized DNS relay | DNSCrypt
+anon-cs-il           Anonymized DNS relay | DNSCrypt | 195.242.212.131
 "Dallas"
-anon-cs-tx           Anonymized DNS relay | DNSCrypt
+anon-cs-tx           Anonymized DNS relay | DNSCrypt | 209.58.147.36
 "Las Vegas"
-anon-cs-nv           Anonymized DNS relay | DNSCrypt
+anon-cs-nv           Anonymized DNS relay | DNSCrypt | 79.110.53.51
 "Los Angeles"
 anon-cs-la           Anonymized DNS relay | DNSCrypt | 195.206.104.203
 "Miami"
-anon-cs-fl           Anonymized DNS relay | DNSCrypt
+anon-cs-fl           Anonymized DNS relay | DNSCrypt | 146.70.240.203
 "New York"
-anon-cs-nyc          Anonymized DNS relay | DNSCrypt
+anon-cs-nyc          Anonymized DNS relay | DNSCrypt | 146.70.154.67
 "Oregon"
-anon-cs-ore          Anonymized DNS relay | DNSCrypt
+anon-cs-ore          Anonymized DNS relay | DNSCrypt | 179.61.223.47
 "Seattle"
-anon-cs-sea          Anonymized DNS relay | DNSCrypt
-anon-inconnu         Anonymized DNS relay | DNSCrypt
+anon-cs-sea          Anonymized DNS relay | DNSCrypt | 64.120.5.251
+anon-inconnu         Anonymized DNS relay | DNSCrypt | 104.238.153.46
 "Washington DC"
-anon-cs-dc           Anonymized DNS relay | DNSCrypt
+anon-cs-dc           Anonymized DNS relay | DNSCrypt | 198.7.58.227
