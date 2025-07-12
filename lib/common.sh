@@ -693,32 +693,122 @@ check_anonymized_dns() {
     fi
 }
 
-# Функция для вывода доступных серверов DNSCrypt
+# Функция для вывода доступных серверов DNSCrypt (обновлена под новый формат)
 list_available_servers() {
-    # Проверка наличия кэш-файла с серверами
-    if [ ! -f "$SERVERS_CACHE" ]; then
-        safe_echo "${YELLOW}Файл с серверами не найден. Загрузите списки серверов с помощью dnscrypt-proxy.${NC}"
+    local servers_file=""
+    
+    # Проверяем несколько возможных расположений файла серверов
+    if [[ -f "$SCRIPT_DIR/lib/DNSCrypt_servers.txt" ]]; then
+        servers_file="$SCRIPT_DIR/lib/DNSCrypt_servers.txt"
+    elif [[ -f "$SERVERS_CACHE" ]]; then
+        servers_file="$SERVERS_CACHE"
+    else
+        safe_echo "${YELLOW}Файл с серверами не найден. Попробуйте загрузить списки серверов.${NC}"
         return 1
     fi
     
-    # Читаем и выводим список DNSCrypt-серверов
-    safe_echo "${YELLOW}Список может быть большим. Показаны только первые 20 серверов.${NC}"
-    grep -A 1 "^## " "$SERVERS_CACHE" | grep -v "^--" | head -n 40 | sed 'N;s/\n/ - /' | sed 's/## //' | nl
+    safe_echo "${BLUE}Доступные DNS-серверы (новый формат):${NC}"
+    safe_echo "${YELLOW}Показаны первые серверы из каждого региона${NC}"
+    echo
     
-    safe_echo "\n${YELLOW}Для просмотра полного списка серверов выполните:${NC}"
-    echo "cat $SERVERS_CACHE | grep -A 1 '^## ' | grep -v '^--' | sed 'N;s/\\n/ - /' | sed 's/## //'"
+    local current_country=""
+    local current_city=""
+    local servers_shown=0
+    local max_servers_per_country=3
+    local country_server_count=0
+    
+    while IFS= read -r line && [[ $servers_shown -lt 50 ]]; do
+        # Пропускаем пустые строки и комментарии
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        
+        # Проверяем, является ли строка названием страны
+        if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+            current_country="${BASH_REMATCH[1]}"
+            country_server_count=0
+            safe_echo "\n${GREEN}🌍 $current_country:${NC}"
+            continue
+        fi
+        
+        # Проверяем, является ли строка названием города
+        if [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+            current_city="${BASH_REMATCH[1]}"
+            continue
+        fi
+        
+        # Если это строка с сервером и мы не превысили лимит для страны
+        if [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]] && [[ -n "$current_country" ]] && [[ $country_server_count -lt $max_servers_per_country ]]; then
+            local server_name=$(echo "$line" | awk '{print $1}')
+            local server_ip=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | tail -1)
+            local features=$(echo "$line" | cut -d'|' -f1-4 | sed 's/[[:space:]]*$//')
+            
+            if [[ -n "$server_name" && -n "$server_ip" ]]; then
+                printf "  %-35s %s\n" "$server_name" "($server_ip)"
+                ((servers_shown++))
+                ((country_server_count++))
+            fi
+        fi
+    done < "$servers_file"
+    
+    echo
+    safe_echo "${CYAN}Показано серверов: $servers_shown${NC}"
+    safe_echo "${YELLOW}Для просмотра полного списка используйте интерактивный выбор серверов${NC}"
 }
 
-# Функция для вывода доступных релеев
+# Функция для вывода доступных релеев (обновлена под новый формат)
 list_available_relays() {
-    # Проверка наличия кэш-файла с релеями
-    if [ ! -f "$RELAYS_CACHE" ]; then
-        safe_echo "${YELLOW}Файл с релеями не найден. Загрузите списки релеев с помощью dnscrypt-proxy.${NC}"
+    local relays_file=""
+    
+    # Проверяем несколько возможных расположений файла релеев
+    if [[ -f "$SCRIPT_DIR/lib/DNSCrypt_relay.txt" ]]; then
+        relays_file="$SCRIPT_DIR/lib/DNSCrypt_relay.txt"
+    elif [[ -f "$RELAYS_CACHE" ]]; then
+        relays_file="$RELAYS_CACHE"
+    else
+        safe_echo "${YELLOW}Файл с релеями не найден. Попробуйте загрузить списки релеев.${NC}"
         return 1
     fi
     
-    # Читаем и выводим список релеев
-    grep -A 1 "^## " "$RELAYS_CACHE" | grep -v "^--" | sed 'N;s/\n/ - /' | sed 's/## //' | nl
+    safe_echo "${BLUE}Доступные DNS-релеи (новый формат):${NC}"
+    echo
+    
+    local current_country=""
+    local current_city=""
+    local relays_shown=0
+    
+    while IFS= read -r line && [[ $relays_shown -lt 50 ]]; do
+        # Пропускаем пустые строки и комментарии
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        
+        # Проверяем, является ли строка названием страны
+        if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+            current_country="${BASH_REMATCH[1]}"
+            safe_echo "\n${GREEN}🌍 $current_country:${NC}"
+            continue
+        fi
+        
+        # Проверяем, является ли строка названием города
+        if [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+            current_city="${BASH_REMATCH[1]}"
+            if [[ -n "$current_city" ]]; then
+                safe_echo "  ${YELLOW}📍 $current_city${NC}"
+            fi
+            continue
+        fi
+        
+        # Если это строка с релеем
+        if [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]] && [[ -n "$current_country" ]]; then
+            local relay_name=$(echo "$line" | awk '{print $1}')
+            local relay_ip=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | tail -1)
+            
+            if [[ -n "$relay_name" && -n "$relay_ip" ]]; then
+                printf "    %-35s %s\n" "$relay_name" "($relay_ip)"
+                ((relays_shown++))
+            fi
+        fi
+    done < "$relays_file"
+    
+    echo
+    safe_echo "${CYAN}Показано релеев: $relays_shown${NC}"
 }
 
 # Функция для вывода доступных ODoH-серверов

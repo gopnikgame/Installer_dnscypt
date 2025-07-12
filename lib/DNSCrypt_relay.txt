@@ -1,6 +1,6 @@
 #[country]
 #"city"
-# servername      		no filter | no logs | DNSSEC | IPv4 | Protocol | Addresses
+# servername		 Anonymized DNS relay | Protocol | Addresses
 
 [AUSTRIA]
 "Vienna"
