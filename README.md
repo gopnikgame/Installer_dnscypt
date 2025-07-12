@@ -66,7 +66,9 @@
 ---
 
 ## 🚀 Быстрая установка
+```bash
 sudo bash -c "$(wget -O - https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/quick_install.sh)"
+```
 **После установки запуск:**
 sudo dnscrypt_manager
 или
