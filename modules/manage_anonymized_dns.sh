@@ -198,6 +198,65 @@ find_relays_by_country() {
     return 0
 }
 
+# Функция поиска релеев по стране (обновлена под новый формат) - БЕЗ логов в stdout
+find_relays_by_country_silent() {
+    local country="$1"
+    local relays_file="$2"
+    
+    if [[ ! -f "$relays_file" ]]; then
+        return 1
+    fi
+    
+    # Массив для хранения найденных релеев
+    declare -a found_relays=()
+    
+    # Флаг для отслеживания, находимся ли мы в нужной стране
+    local in_target_country=false
+    local current_country=""
+    
+    while IFS= read -r line; do
+        # Пропускаем пустые строки и комментарии
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        
+        # Проверяем, является ли строка названием страны (в квадратных скобках)
+        if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+            current_country="${BASH_REMATCH[1]}"
+            # Проверяем, соответствует ли страна искомой (нечувствительно к регистру)
+            if echo "$current_country" | grep -qi "$country"; then
+                in_target_country=true
+            else
+                in_target_country=false
+            fi
+            continue
+        fi
+        
+        # Проверяем, является ли строка названием города (в кавычках)
+        if [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+            # Это город, пропускаем (используем только для контекста)
+            continue
+        fi
+        
+        # Если мы в нужной стране и это строка с релеем
+        if [[ "$in_target_country" == true ]] && [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]]; then
+            # Извлекаем имя релея (первое слово) и IP-адрес (последний элемент)
+            local relay_name=$(echo "$line" | awk '{print $1}')
+            local relay_ip=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | tail -1)
+            
+            if [[ -n "$relay_name" && -n "$relay_ip" ]]; then
+                found_relays+=("$relay_name:$relay_ip")
+            fi
+        fi
+    done < "$relays_file"
+    
+    # Выводим найденные релеи БЕЗ логирования
+    if [[ ${#found_relays[@]} -gt 0 ]]; then
+        printf '%s\n' "${found_relays[@]}"
+        return 0
+    fi
+    
+    return 1
+}
+
 # Улучшенная функция поиска релеев с обработкой близких регионов
 find_nearest_relays_by_region() {
     local primary_country="$1"
@@ -205,20 +264,20 @@ find_nearest_relays_by_region() {
     local max_relays="${3:-5}"
     
     if [[ ! -f "$relays_file" ]]; then
-        log "ERROR" "Файл релеев не найден: $relays_file"
+        log "ERROR" "Файл релеев не найден: $relays_file" >&2
         return 1
     fi
     
     declare -a found_relays=()
     
     # Шаг 1: Ищем релеи в основной стране
-    log "INFO" "Поиск релеев в стране: $primary_country"
-    local primary_relays=($(find_relays_by_country "$primary_country" "$relays_file"))
+    log "INFO" "Поиск релеев в стране: $primary_country" >&2
+    local primary_relays=($(find_relays_by_country_silent "$primary_country" "$relays_file"))
     found_relays+=("${primary_relays[@]}")
     
     # Шаг 2: Если релеев недостаточно, ищем в близких странах
     if [[ ${#found_relays[@]} -lt $max_relays ]]; then
-        log "INFO" "Поиск релеев в близких регионах..."
+        log "INFO" "Поиск релеев в близких регионах..." >&2
         
         # Определяем близкие страны на основе кода страны
         local nearby_countries=()
@@ -268,11 +327,10 @@ find_nearest_relays_by_region() {
                 break
             fi
             
-            log "DEBUG" "Поиск релеев в стране: $country"
-            local nearby_relays=($(find_relays_by_country "$country" "$relays_file"))
+            local nearby_relays=($(find_relays_by_country_silent "$country" "$relays_file"))
             
             if [[ ${#nearby_relays[@]} -gt 0 ]]; then
-                log "INFO" "Найдено релеев в стране $country: ${#nearby_relays[@]}"
+                log "INFO" "Найдено релеев в стране $country: ${#nearby_relays[@]}" >&2
                 found_relays+=("${nearby_relays[@]}")
             fi
         done
@@ -280,7 +338,7 @@ find_nearest_relays_by_region() {
     
     # Шаг 3: Если релеев все еще недостаточно, ищем глобальные релеи
     if [[ ${#found_relays[@]} -lt 2 ]]; then
-        log "INFO" "Поиск дополнительных глобальных релеев..."
+        log "INFO" "Поиск дополнительных глобальных релеев..." >&2
         
         # Получаем все доступные релеи из файла
         local global_relays=()
@@ -335,13 +393,13 @@ find_nearest_relays_by_region() {
         done
     fi
     
-    # Выводим результат
+    # Выводим результат БЕЗ логирования в stdout
     if [[ ${#found_relays[@]} -gt 0 ]]; then
         printf '%s\n' "${found_relays[@]}"
-        log "SUCCESS" "Найдено релеев для региона '$primary_country': ${#found_relays[@]}"
+        log "SUCCESS" "Найдено релеев для региона '$primary_country': ${#found_relays[@]}" >&2
         return 0
     else
-        log "ERROR" "Релеи не найдены"
+        log "ERROR" "Релеи не найдены" >&2
         return 1
     fi
 }
