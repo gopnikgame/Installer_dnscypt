@@ -544,6 +544,65 @@ test_ping_latency() {
     fi
 }
 
+# Функции для выбора быстрых серверов и релеев (ИСПРАВЛЕННЫЕ)
+select_fastest_server() {
+    local servers=("$@")
+    local fastest_server=""
+    local best_ping=999
+    
+    log "INFO" "Тестирование скорости серверов..." >&2
+    
+    for server_data in "${servers[@]}"; do
+        local server_name="${server_data%:*}"
+        local server_ip="${server_data#*:}"
+        
+        safe_echo "  Тестирование $server_name ($server_ip)..." >&2
+        local ping_result=$(test_ping_latency "$server_ip" 3)
+        
+        if [[ "$ping_result" != "999" && "$ping_result" -lt "$best_ping" ]]; then
+            best_ping="$ping_result"
+            fastest_server="$server_name"
+        fi
+        
+        safe_echo "    Пинг: ${ping_result}ms" >&2
+    done
+    
+    if [[ -n "$fastest_server" ]]; then
+        log "SUCCESS" "Выбран сервер: $fastest_server (пинг: ${best_ping}ms)" >&2
+        echo "$fastest_server"
+        return 0
+    else
+        log "ERROR" "Не удалось найти доступный сервер" >&2
+        return 1
+    fi
+}
+
+sort_relays_by_speed() {
+    local relays=("$@")
+    declare -a relay_speeds=()
+    
+    log "INFO" "Тестирование скорости релеев..." >&2
+    
+    # Тестируем каждый релей
+    for relay_data in "${relays[@]}"; do
+        local relay_name="${relay_data%:*}"
+        local relay_ip="${relay_data#*:}"
+        
+        safe_echo "  Тестирование $relay_name ($relay_ip)..." >&2
+        local ping_result=$(test_ping_latency "$relay_ip" 3)
+        
+        relay_speeds+=("$ping_result:$relay_name")
+        safe_echo "    Пинг: ${ping_result}ms" >&2
+    done
+    
+    # Сортируем по скорости
+    local sorted_relays=($(printf '%s\n' "${relay_speeds[@]}" | sort -n | cut -d':' -f2))
+    
+    # Выводим отсортированный список БЕЗ логов
+    printf '%s\n' "${sorted_relays[@]}"
+    return 0
+}
+
 # Функция выбора серверов и релеев по региону (обновленная)
 configure_regional_anonymized_dns() {
     safe_echo "\n${BLUE}=== АВТОМАТИЧЕСКАЯ НАСТРОЙКА АНОНИМНОГО DNS ПО РЕГИОНУ ===${NC}"
@@ -1145,7 +1204,84 @@ show_servers_and_relays_menu() {
     done
 }
 
-# Функция для функций активации секции anonymized_dns (если отсутствует)
+# Функция для показа статистики серверов
+show_servers_statistics() {
+    safe_echo "\n${BLUE}Статистика серверов и релеев:${NC}"
+    echo "════════════════════════════════════════════════════════════════"
+    
+    local servers_file="${DNS_SERVERS_FILE:-$SCRIPT_DIR/lib/DNSCrypt_servers.txt}"
+    local relays_file="${DNS_RELAYS_FILE:-$SCRIPT_DIR/lib/DNSCrypt_relay.txt}"
+    
+    # Статистика серверов
+    if [[ -f "$servers_file" ]]; then
+        local total_servers=0
+        local countries_count=0
+        local cities_count=0
+        
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            
+            if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+                ((countries_count++))
+            elif [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+                ((cities_count++))
+            elif [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]]; then
+                local server_name=$(echo "$line" | awk '{print $1}')
+                if [[ -n "$server_name" ]]; then
+                    ((total_servers++))
+                fi
+            fi
+        done < "$servers_file"
+        
+        safe_echo "${GREEN}📊 DNS-серверы:${NC}"
+        echo "  • Общее количество серверов: $total_servers"
+        echo "  • Количество стран: $countries_count"
+        echo "  • Количество городов: $cities_count"
+    else
+        safe_echo "${RED}❌ Файл серверов не найден${NC}"
+    fi
+    
+    echo
+    
+    # Статистика релеев
+    if [[ -f "$relays_file" ]]; then
+        local total_relays=0
+        local relay_countries_count=0
+        local relay_cities_count=0
+        
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            
+            if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+                ((relay_countries_count++))
+            elif [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+                ((relay_cities_count++))
+            elif [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]]; then
+                local relay_name=$(echo "$line" | awk '{print $1}')
+                if [[ -n "$relay_name" ]]; then
+                    ((total_relays++))
+                fi
+            fi
+        done < "$relays_file"
+        
+        safe_echo "${GREEN}🔗 DNS-релеи:${NC}"
+        echo "  • Общее количество релеев: $total_relays"
+        echo "  • Количество стран: $relay_countries_count"
+        echo "  • Количество городов: $relay_cities_count"
+    else
+        safe_echo "${RED}❌ Файл релеев не найден${NC}"
+    fi
+    
+    echo
+    safe_echo "${BLUE}📈 Рекомендации:${NC}"
+    echo "  • Для лучшей анонимности используйте релеи из разных стран"
+    echo "  • Выбирайте серверы и релеи от разных провайдеров"
+    echo "  • Регулярно обновляйте списки (пункт 6 в меню)"
+    
+    echo "════════════════════════════════════════════════════════════════"
+}
+
+# Функции для функций активации секции anonymized_dns (если отсутствует)
 enable_anonymized_dns_section() {
     log "INFO" "Активация секции [anonymized_dns]..."
     
@@ -1657,13 +1793,13 @@ select_fastest_server() {
     local fastest_server=""
     local best_ping=999
     
-    log "INFO" "Тестирование скорости серверов..."
+    log "INFO" "Тестирование скорости серверов..." >&2
     
     for server_data in "${servers[@]}"; do
         local server_name="${server_data%:*}"
         local server_ip="${server_data#*:}"
         
-        safe_echo "  Тестирование $server_name ($server_ip)..."
+        safe_echo "  Тестирование $server_name ($server_ip)..." >&2
         local ping_result=$(test_ping_latency "$server_ip" 3)
         
         if [[ "$ping_result" != "999" && "$ping_result" -lt "$best_ping" ]]; then
@@ -1671,15 +1807,15 @@ select_fastest_server() {
             fastest_server="$server_name"
         fi
         
-        safe_echo "    Пинг: ${ping_result}ms"
+        safe_echo "    Пинг: ${ping_result}ms" >&2
     done
     
     if [[ -n "$fastest_server" ]]; then
-        log "SUCCESS" "Выбран сервер: $fastest_server (пинг: ${best_ping}ms)"
+        log "SUCCESS" "Выбран сервер: $fastest_server (пинг: ${best_ping}ms)" >&2
         echo "$fastest_server"
         return 0
     else
-        log "ERROR" "Не удалось найти доступный сервер"
+        log "ERROR" "Не удалось найти доступный сервер" >&2
         return 1
     fi
 }
@@ -1688,24 +1824,24 @@ sort_relays_by_speed() {
     local relays=("$@")
     declare -a relay_speeds=()
     
-    log "INFO" "Тестирование скорости релеев..."
+    log "INFO" "Тестирование скорости релеев..." >&2
     
     # Тестируем каждый релей
     for relay_data in "${relays[@]}"; do
         local relay_name="${relay_data%:*}"
         local relay_ip="${relay_data#*:}"
         
-        safe_echo "  Тестирование $relay_name ($relay_ip)..."
+        safe_echo "  Тестирование $relay_name ($relay_ip)..." >&2
         local ping_result=$(test_ping_latency "$relay_ip" 3)
         
         relay_speeds+=("$ping_result:$relay_name")
-        safe_echo "    Пинг: ${ping_result}ms"
+        safe_echo "    Пинг: ${ping_result}ms" >&2
     done
     
     # Сортируем по скорости
     local sorted_relays=($(printf '%s\n' "${relay_speeds[@]}" | sort -n | cut -d':' -f2))
     
-    # Выводим отсортированный список
+    # Выводим отсортированный список БЕЗ логов
     printf '%s\n' "${sorted_relays[@]}"
     return 0
 }
