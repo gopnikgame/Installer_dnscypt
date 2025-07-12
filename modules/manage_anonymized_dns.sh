@@ -630,19 +630,27 @@ configure_regional_anonymized_dns() {
         return 1
     fi
     
-    # Шаг 3: Выбор основного сервера
-    safe_echo "\n${BLUE}Выбор основного DNS-сервера:${NC}"
-    echo "1) Использовать рекомендуемый Quad9 сервер (quad9-dnscrypt-ip4-filter-ecs-pri)"
-    echo "2) Автоматически выбрать локальный сервер из страны: $SERVER_COUNTRY"
+    # Шаг 3: Выбор основного сервера и стратегии
+    safe_echo "\n${BLUE}Выбор стратегии DNS-серверов:${NC}"
+    echo "1) Использовать конкретный Quad9 сервер (quad9-dnscrypt-ip4-filter-ecs-pri)"
+    local country_option_text="России"
+    if [[ -n "$SERVER_COUNTRY" ]]; then
+        country_option_text="$SERVER_COUNTRY"
+    fi
+    echo "2) Автоматически выбрать локальный сервер из страны: $country_option_text"
+    echo "3) Использовать Wildcard (автоматический выбор лучших серверов по фильтрам)"
     echo "0) Отмена"
     
-    read -p "Выберите опцию (0-2): " server_choice
+    read -p "Выберите опцию (0-3): " server_choice
     
     local selected_server=""
+    local use_wildcard=false
+    
     case $server_choice in
         1)
+            # Конкретный Quad9 сервер
             selected_server="quad9-dnscrypt-ip4-filter-ecs-pri"
-            log "INFO" "Выбран сервер Quad9: $selected_server"
+            log "INFO" "Выбран конкретный сервер Quad9: $selected_server"
             ;;
         2)
             # Поиск серверов в стране
@@ -652,19 +660,29 @@ configure_regional_anonymized_dns() {
             
             if [[ ${#servers_in_country[@]} -eq 0 ]]; then
                 log "WARN" "Серверы в стране $SERVER_COUNTRY не найдены"
-                safe_echo "${YELLOW}Будет использован Quad9 сервер по умолчанию${NC}"
-                selected_server="quad9-dnscrypt-ip4-filter-ecs-pri"
+                safe_echo "${YELLOW}Переключение на Wildcard режим${NC}"
+                use_wildcard=true
+                selected_server="*"
             else
                 safe_echo "${GREEN}Найдено серверов: ${#servers_in_country[@]}${NC}"
                 
                 # Выбираем самый быстрый сервер
-                selected_server=$(select_fastest_server "${servers_in_country[@]}")
+                local fastest_server=$(select_fastest_server "${servers_in_country[@]}")
                 
-                if [[ -z "$selected_server" ]]; then
-                    log "WARN" "Не удалось определить быстрый сервер, используем Quad9"
-                    selected_server="quad9-dnscrypt-ip4-filter-ecs-pri"
+                if [[ -z "$fastest_server" ]]; then
+                    log "WARN" "Не удалось определить быстрый сервер, используем Wildcard"
+                    use_wildcard=true
+                    selected_server="*"
+                else
+                    selected_server="$fastest_server"
                 fi
             fi
+            ;;
+        3)
+            # Wildcard режим
+            use_wildcard=true
+            selected_server="*"
+            log "INFO" "Выбран Wildcard режим - автоматический выбор серверов"
             ;;
         0)
             log "INFO" "Настройка отменена"
@@ -676,26 +694,7 @@ configure_regional_anonymized_dns() {
             ;;
     esac
     
-    # Настраиваем server_names в соответствии с документацией DNSCrypt
-    log "INFO" "Настройка server_names согласно документации DNSCrypt..."
-    
-    # Согласно документации, при использовании анонимного DNS с wildcard маршрутами
-    # server_names должен быть закомментирован для использования всех серверов,
-    # соответствующих фильтрам
-    
-    # Проверяем текущее состояние server_names
-    if grep -q "^server_names = " "$DNSCRYPT_CONFIG"; then
-        # Комментируем существующую строку server_names
-        sed -i 's/^server_names = /#server_names = /' "$DNSCRYPT_CONFIG"
-        log "SUCCESS" "server_names закомментирован для использования с анонимным DNS"
-        log "INFO" "Теперь будут использоваться все серверы, соответствующие фильтрам"
-    elif grep -q "^#server_names = " "$DNSCRYPT_CONFIG"; then
-        log "INFO" "server_names уже закомментирован - корректно для анонимного DNS"
-    else
-        # Добавляем закомментированную строку для наглядности
-        sed -i "1a\\# server_names закомментирован для анонимного DNS - используются все серверы по фильтрам\\n#server_names = ['$selected_server']" "$DNSCRYPT_CONFIG"
-        log "SUCCESS" "Добавлен закомментированный server_names для справки"
-    fi
+    log "INFO" "Используется стратегия: $(if [[ $use_wildcard == true ]]; then echo 'Wildcard (автоматический выбор)'; else echo "Конкретный сервер: $selected_server"; fi)"
     
     # Шаг 4: Улучшенный поиск релеев
     safe_echo "\n${BLUE}Поиск релеев для анонимизации...${NC}"
@@ -744,34 +743,56 @@ configure_regional_anonymized_dns() {
         return 1
     fi
     
-    # Шаг 5: Применение конфигурации
-    safe_echo "\n${BLUE}Применение конфигурации:${NC}"
-    echo "  Анонимный DNS: включен для всех совместимых серверов"
-    echo "  Релеи для анонимизации:"
-    for relay in "${selected_relays[@]}"; do
-        echo "    - $relay"
-    done
-    echo "  Маршрутизация: wildcard (*) - через выбранные релеи"
-    echo
-    safe_echo "${YELLOW}Согласно документации DNSCrypt:${NC}"
-    echo "  • server_names будет закомментирован"
-    echo "  • Используются все серверы, соответствующие фильтрам"
-    echo "  • Трафик ко всем серверам идет через выбранные релеи"
-    echo
-    
-    read -p "Применить эту конфигурацию? (y/n): " apply_confirm
-    if [[ "${apply_confirm,,}" != "y" ]]; then
-        log "INFO" "Конфигурация не применена"
-        return 0
-    fi
-    
     # Создаем резервную копию
     backup_config "$DNSCRYPT_CONFIG" "dnscrypt-config-before-regional"
     
     # Активируем секцию anonymized_dns
     enable_anonymized_dns_section
     
-    # Настраиваем маршруты (ИСПРАВЛЕННАЯ версия согласно документации DNSCrypt)
+    # Настраиваем server_names и DoH согласно документации DNSCrypt
+    log "INFO" "Настройка server_names и DoH согласно документации DNSCrypt..."
+    
+    # Согласно документации DNSCrypt при анонимном DNS:
+    # 1. server_names должен быть закомментирован (для всех режимов)
+    # 2. doh_servers должен быть false (анонимизация работает только с DNSCrypt)
+    
+    # Комментируем server_names независимо от выбранного сервера
+    if grep -q "^server_names = " "$DNSCRYPT_CONFIG"; then
+        sed -i 's/^server_names = /#server_names = /' "$DNSCRYPT_CONFIG"
+        log "SUCCESS" "server_names закомментирован для анонимного DNS"
+    elif grep -q "^#server_names = " "$DNSCRYPT_CONFIG"; then
+        log "INFO" "server_names уже закомментирован"
+    else
+        # Добавляем закомментированную строку для наглядности
+        sed -i "1a\\# server_names закомментирован для анонимного DNS\\n#server_names = ['используются все серверы по фильтрам']" "$DNSCRYPT_CONFIG"
+        log "SUCCESS" "Добавлен закомментированный server_names"
+    fi
+    
+    # Настраиваем DNSCrypt серверы
+    if ! grep -q "^dnscrypt_servers = true" "$DNSCRYPT_CONFIG"; then
+        if grep -q "^dnscrypt_servers = " "$DNSCRYPT_CONFIG"; then
+            sed -i 's/^dnscrypt_servers = .*/dnscrypt_servers = true/' "$DNSCRYPT_CONFIG"
+        else
+            sed -i "1a\\dnscrypt_servers = true" "$DNSCRYPT_CONFIG"
+        fi
+        log "SUCCESS" "DNSCrypt серверы включены"
+    else
+        log "INFO" "DNSCrypt серверы уже включены"
+    fi
+    
+    # Отключаем DoH серверы согласно документации
+    if ! grep -q "^doh_servers = false" "$DNSCRYPT_CONFIG"; then
+        if grep -q "^doh_servers = " "$DNSCRYPT_CONFIG"; then
+            sed -i 's/^doh_servers = .*/doh_servers = false/' "$DNSCRYPT_CONFIG"
+        else
+            sed -i "/^dnscrypt_servers = true/a\\doh_servers = false" "$DNSCRYPT_CONFIG"
+        fi
+        log "SUCCESS" "DoH серверы отключены согласно документации (анонимизация работает только с DNSCrypt)"
+    else
+        log "INFO" "DoH серверы уже отключены"
+    fi
+    
+    # Настраиваем маршруты согласно выбранной стратегии
     local relays_formatted=""
     for relay in "${selected_relays[@]}"; do
         local relay_name="${relay%:*}"
@@ -782,15 +803,14 @@ configure_regional_anonymized_dns() {
     done
     
     # Создаем временный файл для безопасной записи конфигурации маршрутов
-    # Согласно документации DNSCrypt используем wildcard (*) для всех серверов
     local temp_routes_file="/tmp/dnscrypt_routes_$$"
     cat > "$temp_routes_file" << EOF
 routes = [
-    { server_name='*', via=[$relays_formatted] }
+    { server_name='$selected_server', via=[$relays_formatted] }
 ]
 EOF
     
-    log "INFO" "Настройка маршрутов анонимизации с wildcard для всех серверов..."
+    log "INFO" "Настройка маршрутов для выбранной стратегии: $selected_server"
     
     # Заменяем секцию routes более безопасным способом
     if grep -q "^routes = \[" "$DNSCRYPT_CONFIG" || grep -q "^# routes = \[" "$DNSCRYPT_CONFIG"; then
@@ -860,7 +880,7 @@ EOF
         # Заменяем оригинальный файл
         if [[ -s "${DNSCRYPT_CONFIG}.tmp" ]]; then
             mv "${DNSCRYPT_CONFIG}.tmp" "$DNSCRYPT_CONFIG"
-            log "SUCCESS" "Маршруты успешно обновлены с wildcard конфигурацией"
+            log "SUCCESS" "Маршруты успешно обновлены с выбранной конфигурацией"
         else
             log "ERROR" "Ошибка при создании нового конфигурационного файла"
             rm -f "${DNSCRYPT_CONFIG}.tmp"
@@ -869,9 +889,9 @@ EOF
         fi
     else
         # Добавляем routes в секцию anonymized_dns если их вообще нет
-        log "DEBUG" "Добавление новых маршрутов с wildcard..."
+        log "DEBUG" "Добавление новых маршрутов с выбранной конфигурацией..."
         sed -i "/^\[anonymized_dns\]/r $temp_routes_file" "$DNSCRYPT_CONFIG"
-        log "SUCCESS" "Маршруты успешно добавлены с wildcard конфигурацией"
+        log "SUCCESS" "Маршруты успешно добавлены с выбранной конфигурацией"
     fi
     
     # Удаляем временный файл
@@ -880,22 +900,68 @@ EOF
     # Включаем skip_incompatible
     add_config_option "$DNSCRYPT_CONFIG" "anonymized_dns" "skip_incompatible" "true"
     
+    # Шаг 5: Применение конфигурации
+    safe_echo "\n${BLUE}Применение конфигурации:${NC}"
+    
+    if [[ "$use_wildcard" == true ]]; then
+        echo "  Стратегия серверов: Wildcard (*) - автоматический выбор лучших"
+        echo "  Используемые серверы: все совместимые DNSCrypt серверы по фильтрам"
+    else
+        echo "  Стратегия серверов: Конкретный сервер"
+        echo "  Выбранный сервер: $selected_server"
+    fi
+    
+    echo "  Релеи для анонимизации:"
+    for relay in "${selected_relays[@]}"; do
+        echo "    - $relay"
+    done
+    echo
+    safe_echo "${YELLOW}Настройки согласно документации DNSCrypt:${NC}"
+    echo "  • server_names: закомментирован (используются фильтры)"
+    echo "  • dnscrypt_servers: true (включен)"
+    echo "  • doh_servers: false (отключен, несовместим с анонимизацией)"
+    echo "  • Маршрутизация: через выбранные релеи"
+    echo
+    
+    read -p "Применить эту конфигурацию? (y/n): " apply_confirm
+    if [[ "${apply_confirm,,}" != "y" ]]; then
+        log "INFO" "Конфигурация не применена"
+        return 0
+    fi
+    
     # Перезапускаем службу
     log "INFO" "Перезапуск DNSCrypt-proxy для применения изменений..."
     if restart_service "$DNSCRYPT_SERVICE"; then
         safe_echo "\n${GREEN}=== НАСТРОЙКА ЗАВЕРШЕНА УСПЕШНО ===${NC}"
         echo
         safe_echo "${BLUE}Конфигурация анонимного DNS:${NC}"
-        echo "  ✅ Режим: Anonymized DNSCrypt с wildcard маршрутизацией"
+        echo "  ✅ Режим: Anonymized DNSCrypt"
+        
+        if [[ "$use_wildcard" == true ]]; then
+            echo "  ✅ Серверы: Wildcard (*) - автоматический выбор лучших"
+            echo "  ✅ Критерии: все совместимые DNSCrypt серверы по фильтрам"
+        else
+            echo "  ✅ Сервер: $selected_server"
+            echo "  ✅ Режим: фиксированный сервер через релеи"
+        fi
+        
         echo "  ✅ Количество релеев: ${#selected_relays[@]}"
-        echo "  ✅ Страна сервера: $SERVER_COUNTRY"
-        echo "  ✅ server_names: закомментирован (используются все совместимые серверы)"
-        echo "  ✅ Анонимизация активна для всех DNS-запросов"
+        echo "  ✅ Страна: $SERVER_COUNTRY"
+        echo "  ✅ server_names: закомментирован"
+        echo "  ✅ dnscrypt_servers: true"
+        echo "  ✅ doh_servers: false"
+        echo "  ✅ Анонимизация: активна"
         echo
         safe_echo "${YELLOW}Рекомендации:${NC}"
         echo "  • Проверьте работу DNS: dig @127.0.0.1 google.com"
         echo "  • Проверьте логи: journalctl -u dnscrypt-proxy -f"
-        echo "  • Ожидайте сообщение: 'Anonymized DNS: routing everything via [relay1 relay2 ...]'"
+        
+        if [[ "$use_wildcard" == true ]]; then
+            echo "  • Ожидайте сообщение: 'Anonymized DNS: routing everything via [релеи...]'"
+        else
+            echo "  • Ожидайте сообщение о маршрутизации через выбранные релеи"
+        fi
+        
         echo "  • При проблемах используйте пункт 'Исправить конфигурацию'"
         
         log "SUCCESS" "Региональная настройка анонимного DNS завершена"
@@ -997,7 +1063,7 @@ display_relays_by_region() {
             continue
         fi
         
-        # Проверяем, является ли строка названием города
+        # Проверяем, является ли строка названием города (в кавычках)
         if [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
             current_city="${BASH_REMATCH[1]}"
             safe_echo "  ${YELLOW}📍 $current_city${NC}"
