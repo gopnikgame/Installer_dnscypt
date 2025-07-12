@@ -676,6 +676,27 @@ configure_regional_anonymized_dns() {
             ;;
     esac
     
+    # Настраиваем server_names в соответствии с документацией DNSCrypt
+    log "INFO" "Настройка server_names согласно документации DNSCrypt..."
+    
+    # Согласно документации, при использовании анонимного DNS с wildcard маршрутами
+    # server_names должен быть закомментирован для использования всех серверов,
+    # соответствующих фильтрам
+    
+    # Проверяем текущее состояние server_names
+    if grep -q "^server_names = " "$DNSCRYPT_CONFIG"; then
+        # Комментируем существующую строку server_names
+        sed -i 's/^server_names = /#server_names = /' "$DNSCRYPT_CONFIG"
+        log "SUCCESS" "server_names закомментирован для использования с анонимным DNS"
+        log "INFO" "Теперь будут использоваться все серверы, соответствующие фильтрам"
+    elif grep -q "^#server_names = " "$DNSCRYPT_CONFIG"; then
+        log "INFO" "server_names уже закомментирован - корректно для анонимного DNS"
+    else
+        # Добавляем закомментированную строку для наглядности
+        sed -i "1a\\# server_names закомментирован для анонимного DNS - используются все серверы по фильтрам\\n#server_names = ['$selected_server']" "$DNSCRYPT_CONFIG"
+        log "SUCCESS" "Добавлен закомментированный server_names для справки"
+    fi
+    
     # Шаг 4: Улучшенный поиск релеев
     safe_echo "\n${BLUE}Поиск релеев для анонимизации...${NC}"
     
@@ -725,11 +746,17 @@ configure_regional_anonymized_dns() {
     
     # Шаг 5: Применение конфигурации
     safe_echo "\n${BLUE}Применение конфигурации:${NC}"
-    echo "  Основной сервер: $selected_server"
+    echo "  Анонимный DNS: включен для всех совместимых серверов"
     echo "  Релеи для анонимизации:"
     for relay in "${selected_relays[@]}"; do
         echo "    - $relay"
     done
+    echo "  Маршрутизация: wildcard (*) - через выбранные релеи"
+    echo
+    safe_echo "${YELLOW}Согласно документации DNSCrypt:${NC}"
+    echo "  • server_names будет закомментирован"
+    echo "  • Используются все серверы, соответствующие фильтрам"
+    echo "  • Трафик ко всем серверам идет через выбранные релеи"
     echo
     
     read -p "Применить эту конфигурацию? (y/n): " apply_confirm
@@ -744,7 +771,7 @@ configure_regional_anonymized_dns() {
     # Активируем секцию anonymized_dns
     enable_anonymized_dns_section
     
-    # Настраиваем маршруты (ИСПРАВЛЕННАЯ версия с безопасным созданием файла)
+    # Настраиваем маршруты (ИСПРАВЛЕННАЯ версия согласно документации DNSCrypt)
     local relays_formatted=""
     for relay in "${selected_relays[@]}"; do
         local relay_name="${relay%:*}"
@@ -755,20 +782,96 @@ configure_regional_anonymized_dns() {
     done
     
     # Создаем временный файл для безопасной записи конфигурации маршрутов
+    # Согласно документации DNSCrypt используем wildcard (*) для всех серверов
     local temp_routes_file="/tmp/dnscrypt_routes_$$"
     cat > "$temp_routes_file" << EOF
 routes = [
-    { server_name='$selected_server', via=[$relays_formatted] }
+    { server_name='*', via=[$relays_formatted] }
 ]
 EOF
     
-    # Заменяем секцию routes безопасным способом
-    if grep -q "routes = \[" "$DNSCRYPT_CONFIG"; then
-        # Используем perl для более безопасной замены многострочного блока
-        perl -i -pe 'BEGIN{undef $/;} s/routes = \[[^\]]*\]/`cat '"$temp_routes_file"'`/smg' "$DNSCRYPT_CONFIG"
+    log "INFO" "Настройка маршрутов анонимизации с wildcard для всех серверов..."
+    
+    # Заменяем секцию routes более безопасным способом
+    if grep -q "^routes = \[" "$DNSCRYPT_CONFIG" || grep -q "^# routes = \[" "$DNSCRYPT_CONFIG"; then
+        # Найдем и заменим существующую секцию routes в [anonymized_dns]
+        log "DEBUG" "Замена существующих маршрутов..."
+        
+        # Используем awk для точной замены секции routes в anonymized_dns
+        awk -v routes_file="$temp_routes_file" '
+        BEGIN { in_anon_section = 0; in_routes = 0; routes_replaced = 0 }
+        
+        # Начало секции anonymized_dns
+        /^\[anonymized_dns\]/ { 
+            in_anon_section = 1; 
+            print; 
+            next 
+        }
+        
+        # Начало другой секции - выходим из anonymized_dns
+        /^\[/ && !/^\[anonymized_dns\]/ { 
+            # Если мы были в секции anonymized_dns и не заменили routes, добавляем их
+            if (in_anon_section && !routes_replaced) {
+                while ((getline line < routes_file) > 0) {
+                    print line
+                }
+                close(routes_file)
+                routes_replaced = 1
+            }
+            in_anon_section = 0; 
+            in_routes = 0;
+            print; 
+            next 
+        }
+        
+        # В секции anonymized_dns ищем routes
+        in_anon_section && /^# routes = \[/ || in_anon_section && /^routes = \[/ { 
+            in_routes = 1;
+            # Заменяем на содержимое файла routes
+            while ((getline line < routes_file) > 0) {
+                print line
+            }
+            close(routes_file)
+            routes_replaced = 1
+            next 
+        }
+        
+        # Пропускаем строки внутри блока routes до закрывающей скобки
+        in_routes && /^]/ || in_routes && /^# ]/ { 
+            in_routes = 0; 
+            next 
+        }
+        in_routes { next }
+        
+        # Все остальные строки печатаем как есть
+        { print }
+        
+        END {
+            # Если мы до сих пор в секции anonymized_dns и не добавили routes
+            if (in_anon_section && !routes_replaced) {
+                while ((getline line < routes_file) > 0) {
+                    print line
+                }
+                close(routes_file)
+            }
+        }
+        ' "$DNSCRYPT_CONFIG" > "${DNSCRYPT_CONFIG}.tmp"
+        
+        # Заменяем оригинальный файл
+        if [[ -s "${DNSCRYPT_CONFIG}.tmp" ]]; then
+            mv "${DNSCRYPT_CONFIG}.tmp" "$DNSCRYPT_CONFIG"
+            log "SUCCESS" "Маршруты успешно обновлены с wildcard конфигурацией"
+        else
+            log "ERROR" "Ошибка при создании нового конфигурационного файла"
+            rm -f "${DNSCRYPT_CONFIG}.tmp"
+            rm -f "$temp_routes_file"
+            return 1
+        fi
     else
-        # Добавляем routes в секцию anonymized_dns
+        # Добавляем routes в секцию anonymized_dns если их вообще нет
+        log "DEBUG" "Добавление новых маршрутов с wildcard..."
         sed -i "/^\[anonymized_dns\]/r $temp_routes_file" "$DNSCRYPT_CONFIG"
+        log "SUCCESS" "Маршруты успешно добавлены с wildcard конфигурацией"
     fi
     
     # Удаляем временный файл
@@ -783,14 +886,16 @@ EOF
         safe_echo "\n${GREEN}=== НАСТРОЙКА ЗАВЕРШЕНА УСПЕШНО ===${NC}"
         echo
         safe_echo "${BLUE}Конфигурация анонимного DNS:${NC}"
-        echo "  ✅ Основной сервер: $selected_server"
+        echo "  ✅ Режим: Anonymized DNSCrypt с wildcard маршрутизацией"
         echo "  ✅ Количество релеев: ${#selected_relays[@]}"
         echo "  ✅ Страна сервера: $SERVER_COUNTRY"
-        echo "  ✅ Анонимизация активна"
+        echo "  ✅ server_names: закомментирован (используются все совместимые серверы)"
+        echo "  ✅ Анонимизация активна для всех DNS-запросов"
         echo
         safe_echo "${YELLOW}Рекомендации:${NC}"
         echo "  • Проверьте работу DNS: dig @127.0.0.1 google.com"
         echo "  • Проверьте логи: journalctl -u dnscrypt-proxy -f"
+        echo "  • Ожидайте сообщение: 'Anonymized DNS: routing everything via [relay1 relay2 ...]'"
         echo "  • При проблемах используйте пункт 'Исправить конфигурацию'"
         
         log "SUCCESS" "Региональная настройка анонимного DNS завершена"
