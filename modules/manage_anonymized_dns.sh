@@ -198,6 +198,154 @@ find_relays_by_country() {
     return 0
 }
 
+# Улучшенная функция поиска релеев с обработкой близких регионов
+find_nearest_relays_by_region() {
+    local primary_country="$1"
+    local relays_file="$2"
+    local max_relays="${3:-5}"
+    
+    if [[ ! -f "$relays_file" ]]; then
+        log "ERROR" "Файл релеев не найден: $relays_file"
+        return 1
+    fi
+    
+    declare -a found_relays=()
+    
+    # Шаг 1: Ищем релеи в основной стране
+    log "INFO" "Поиск релеев в стране: $primary_country"
+    local primary_relays=($(find_relays_by_country "$primary_country" "$relays_file"))
+    found_relays+=("${primary_relays[@]}")
+    
+    # Шаг 2: Если релеев недостаточно, ищем в близких странах
+    if [[ ${#found_relays[@]} -lt $max_relays ]]; then
+        log "INFO" "Поиск релеев в близких регионах..."
+        
+        # Определяем близкие страны на основе кода страны
+        local nearby_countries=()
+        case "$SERVER_COUNTRY_CODE" in
+            "RU")
+                nearby_countries=("GERMANY" "FRANCE" "NETHERLANDS" "FINLAND" "ESTONIA" "LATVIA" "LITHUANIA" "POLAND" "CZECH REPUBLIC" "AUSTRIA" "SWITZERLAND")
+                ;;
+            "US")
+                nearby_countries=("CANADA" "MEXICO" "UNITED KINGDOM" "GERMANY" "FRANCE" "NETHERLANDS")
+                ;;
+            "CA")
+                nearby_countries=("USA" "UNITED STATES" "UNITED KINGDOM" "GERMANY" "FRANCE" "NETHERLANDS")
+                ;;
+            "GB"|"UK")
+                nearby_countries=("FRANCE" "GERMANY" "NETHERLANDS" "BELGIUM" "IRELAND" "SPAIN" "ITALY")
+                ;;
+            "DE")
+                nearby_countries=("FRANCE" "NETHERLANDS" "AUSTRIA" "SWITZERLAND" "BELGIUM" "POLAND" "CZECH REPUBLIC")
+                ;;
+            "FR")
+                nearby_countries=("GERMANY" "SWITZERLAND" "BELGIUM" "NETHERLANDS" "SPAIN" "ITALY" "UNITED KINGDOM")
+                ;;
+            "JP")
+                nearby_countries=("SINGAPORE" "SOUTH KOREA" "HONG KONG" "TAIWAN" "AUSTRALIA" "GERMANY" "FRANCE" "NETHERLANDS")
+                ;;
+            "AU")
+                nearby_countries=("SINGAPORE" "NEW ZEALAND" "HONG KONG" "JAPAN" "GERMANY" "FRANCE" "NETHERLANDS")
+                ;;
+            "CN")
+                nearby_countries=("SINGAPORE" "HONG KONG" "TAIWAN" "JAPAN" "SOUTH KOREA" "GERMANY" "FRANCE" "NETHERLANDS")
+                ;;
+            "BR")
+                nearby_countries=("ARGENTINA" "CHILE" "MEXICO" "USA" "UNITED STATES" "GERMANY" "FRANCE" "NETHERLANDS")
+                ;;
+            "IN")
+                nearby_countries=("SINGAPORE" "HONG KONG" "GERMANY" "FRANCE" "NETHERLANDS" "UNITED KINGDOM")
+                ;;
+            *)
+                # Глобальные релеи по умолчанию
+                nearby_countries=("GERMANY" "FRANCE" "NETHERLANDS" "UNITED KINGDOM" "SINGAPORE" "USA" "UNITED STATES" "CANADA")
+                ;;
+        esac
+        
+        # Ищем релеи в близких странах
+        for country in "${nearby_countries[@]}"; do
+            if [[ ${#found_relays[@]} -ge $max_relays ]]; then
+                break
+            fi
+            
+            log "DEBUG" "Поиск релеев в стране: $country"
+            local nearby_relays=($(find_relays_by_country "$country" "$relays_file"))
+            
+            if [[ ${#nearby_relays[@]} -gt 0 ]]; then
+                log "INFO" "Найдено релеев в стране $country: ${#nearby_relays[@]}"
+                found_relays+=("${nearby_relays[@]}")
+            fi
+        done
+    fi
+    
+    # Шаг 3: Если релеев все еще недостаточно, ищем глобальные релеи
+    if [[ ${#found_relays[@]} -lt 2 ]]; then
+        log "INFO" "Поиск дополнительных глобальных релеев..."
+        
+        # Получаем все доступные релеи из файла
+        local global_relays=()
+        local current_country=""
+        
+        while IFS= read -r line; do
+            # Пропускаем пустые строки и комментарии
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            
+            # Проверяем, является ли строка названием страны
+            if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+                current_country="${BASH_REMATCH[1]}"
+                continue
+            fi
+            
+            # Проверяем, является ли строка названием города
+            if [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+                continue
+            fi
+            
+            # Если это строка с релеем
+            if [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]] && [[ -n "$current_country" ]]; then
+                local relay_name=$(echo "$line" | awk '{print $1}')
+                local relay_ip=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | tail -1)
+                
+                if [[ -n "$relay_name" && -n "$relay_ip" ]]; then
+                    # Проверяем, что этот релей еще не добавлен
+                    local already_added=false
+                    for existing_relay in "${found_relays[@]}"; do
+                        if [[ "$existing_relay" == "$relay_name:$relay_ip" ]]; then
+                            already_added=true
+                            break
+                        fi
+                    done
+                    
+                    if [[ "$already_added" == false ]]; then
+                        global_relays+=("$relay_name:$relay_ip")
+                        if [[ ${#global_relays[@]} -ge 10 ]]; then
+                            break
+                        fi
+                    fi
+                fi
+            fi
+        done < "$relays_file"
+        
+        # Добавляем глобальные релеи
+        for relay in "${global_relays[@]}"; do
+            if [[ ${#found_relays[@]} -ge $max_relays ]]; then
+                break
+            fi
+            found_relays+=("$relay")
+        done
+    fi
+    
+    # Выводим результат
+    if [[ ${#found_relays[@]} -gt 0 ]]; then
+        printf '%s\n' "${found_relays[@]}"
+        log "SUCCESS" "Найдено релеев для региона '$primary_country': ${#found_relays[@]}"
+        return 0
+    else
+        log "ERROR" "Релеи не найдены"
+        return 1
+    fi
+}
+
 # Функция определения геолокации сервера
 get_server_geolocation() {
     local retry_count=3
@@ -338,7 +486,7 @@ test_ping_latency() {
     fi
 }
 
-# Функция выбора серверов и релеев по региону
+# Функция выбора серверов и релеев по региону (обновленная)
 configure_regional_anonymized_dns() {
     safe_echo "\n${BLUE}=== АВТОМАТИЧЕСКАЯ НАСТРОЙКА АНОНИМНОГО DNS ПО РЕГИОНУ ===${NC}"
     echo
@@ -411,53 +559,40 @@ configure_regional_anonymized_dns() {
             ;;
     esac
     
-    # Шаг 4: Поиск релеев
+    # Шаг 4: Улучшенный поиск релеев
     safe_echo "\n${BLUE}Поиск релеев для анонимизации...${NC}"
     
-    # Ищем релеи в той же стране
-    local relays_in_country=($(find_relays_by_country "$SERVER_COUNTRY" "$DNS_RELAYS_FILE"))
+    # Используем улучшенную функцию поиска релеев
+    local relays_in_region=($(find_nearest_relays_by_region "$SERVER_COUNTRY" "$DNS_RELAYS_FILE" 10))
     
-    # Ищем релеи в соседних странах (для лучшей анонимности)
-    local nearby_countries=()
-    case "$SERVER_COUNTRY_CODE" in
-        "US") nearby_countries=("CANADA" "MEXICO") ;;
-        "CA") nearby_countries=("USA" "UNITED STATES") ;;
-        "GB"|"UK") nearby_countries=("FRANCE" "GERMANY" "NETHERLANDS") ;;
-        "DE") nearby_countries=("FRANCE" "NETHERLANDS" "AUSTRIA" "SWITZERLAND") ;;
-        "FR") nearby_countries=("GERMANY" "SWITZERLAND" "BELGIUM" "NETHERLANDS") ;;
-        "RU") nearby_countries=("FINLAND" "ESTONIA" "LATVIA" "LITHUANIA") ;;
-        "JP") nearby_countries=("SINGAPORE" "SOUTH KOREA") ;;
-        "AU") nearby_countries=("SINGAPORE" "NEW ZEALAND") ;;
-        *) nearby_countries=("GERMANY" "FRANCE" "NETHERLANDS" "SINGAPORE") ;;
-    esac
-    
-    # Добавляем релеи из соседних стран
-    for country in "${nearby_countries[@]}"; do
-        local nearby_relays=($(find_relays_by_country "$country" "$DNS_RELAYS_FILE"))
-        relays_in_country+=("${nearby_relays[@]}")
-    done
-    
-    # Если релеев мало, добавляем глобальные релеи
-    if [[ ${#relays_in_country[@]} -lt 3 ]]; then
-        log "INFO" "Добавление глобальных релеев для большей надежности"
-        local global_relays=($(grep -o '^[^[:space:]]*' "$DNS_RELAYS_FILE" | head -10))
-        for relay in "${global_relays[@]}"; do
-            local relay_ip=$(grep "^$relay" "$DNS_RELAYS_FILE" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+$')
-            if [[ -n "$relay_ip" ]]; then
-                relays_in_country+=("$relay:$relay_ip")
-            fi
-        done
-    fi
-    
-    if [[ ${#relays_in_country[@]} -eq 0 ]]; then
-        log "ERROR" "Не найдены подходящие релеи"
+    if [[ ${#relays_in_region[@]} -eq 0 ]]; then
+        log "ERROR" "Не найдены подходящие релеи для анонимизации"
+        safe_echo "${RED}Возможные причины:${NC}"
+        echo "  - Проблемы с загрузкой списка релеев"
+        echo "  - Сетевые проблемы"
+        echo "  - Неправильный формат файла релеев"
+        echo
+        safe_echo "${YELLOW}Попробуйте:${NC}"
+        echo "  1. Перезапустить скрипт"
+        echo "  2. Проверить подключение к интернету"
+        echo "  3. Использовать ручную настройку (пункт 3 главного меню)"
         return 1
     fi
     
-    safe_echo "${GREEN}Найдено релеев: ${#relays_in_country[@]}${NC}"
+    safe_echo "${GREEN}Найдено релеев для анонимизации: ${#relays_in_region[@]}${NC}"
     
-    # Сортируем релеи по скорости
-    local sorted_relays=($(sort_relays_by_speed "${relays_in_country[@]}"))
+    # Показываем найденные релеи
+    safe_echo "\n${BLUE}Найденные релеи:${NC}"
+    for ((i=0; i<${#relays_in_region[@]} && i<10; i++)); do
+        local relay_data="${relays_in_region[i]}"
+        local relay_name="${relay_data%:*}"
+        local relay_ip="${relay_data#*:}"
+        echo "  $((i+1)). $relay_name ($relay_ip)"
+    done
+    
+    # Тестируем скорость релеев и выбираем лучшие
+    safe_echo "\n${BLUE}Тестирование скорости релеев...${NC}"
+    local sorted_relays=($(sort_relays_by_speed "${relays_in_region[@]}"))
     
     # Берем топ-3 релея
     local selected_relays=()
@@ -465,6 +600,11 @@ configure_regional_anonymized_dns() {
     for (( i=0; i<${#sorted_relays[@]} && i<$max_relays; i++ )); do
         selected_relays+=("${sorted_relays[i]}")
     done
+    
+    if [[ ${#selected_relays[@]} -eq 0 ]]; then
+        log "ERROR" "Не удалось выбрать быстрые релеи"
+        return 1
+    fi
     
     # Шаг 5: Применение конфигурации
     safe_echo "\n${BLUE}Применение конфигурации:${NC}"
@@ -493,10 +633,11 @@ configure_regional_anonymized_dns() {
     # Настраиваем маршруты
     local relays_formatted=""
     for relay in "${selected_relays[@]}"; do
+        local relay_name="${relay%:*}"
         if [[ -n "$relays_formatted" ]]; then
             relays_formatted+=", "
         fi
-        relays_formatted+="'$relay'"
+        relays_formatted+="'$relay_name'"
     done
     
     local route_config="routes = [
@@ -744,6 +885,96 @@ search_servers() {
     fi
 }
 
+# Функция для поиска релеев по ключевым словам (новый формат)
+search_relays() {
+    local search_term="$1"
+    local relays_file="${2:-$DNS_RELAYS_FILE}"
+    
+    if [[ -z "$search_term" ]]; then
+        read -p "Введите поисковый запрос (страна, город или имя релея): " search_term
+    fi
+    
+    if [[ -z "$search_term" ]]; then
+        log "ERROR" "Поисковый запрос не может быть пустым"
+        return 1
+    fi
+    
+    if [[ ! -f "$relays_file" ]]; then
+        if [[ -f "$SCRIPT_DIR/lib/DNSCrypt_relay.txt" ]]; then
+            relays_file="$SCRIPT_DIR/lib/DNSCrypt_relay.txt"
+        else
+            log "ERROR" "Файл релеев не найден"
+            return 1
+        fi
+    fi
+    
+    safe_echo "\n${BLUE}Результаты поиска релеев по запросу: '$search_term'${NC}"
+    echo "════════════════════════════════════════════════════════════════"
+    
+    local current_country=""
+    local current_city=""
+    local found_count=0
+    local match_context=""
+    
+    while IFS= read -r line; do
+        # Пропускаем пустые строки и комментарии
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        
+        # Проверяем, является ли строка названием страны
+        if [[ "$line" =~ ^\[([^\]]+)\]$ ]]; then
+            current_country="${BASH_REMATCH[1]}"
+            if echo "$current_country" | grep -qi "$search_term"; then
+                match_context="country"
+            else
+                match_context=""
+            fi
+            continue
+        fi
+        
+        # Проверяем, является ли строка названием города
+        if [[ "$line" =~ ^\"([^\"]+)\"$ ]]; then
+            current_city="${BASH_REMATCH[1]}"
+            if echo "$current_city" | grep -qi "$search_term"; then
+                match_context="city"
+            elif [[ "$match_context" != "country" ]]; then
+                match_context=""
+            fi
+            continue
+        fi
+        
+        # Если это строка с релеем
+        if [[ ! "$line" =~ ^\[.*\]$ ]] && [[ ! "$line" =~ ^\".*\"$ ]] && [[ -n "$current_country" ]]; then
+            local relay_name=$(echo "$line" | awk '{print $1}')
+            local relay_ip=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | tail -1)
+            local features=$(echo "$line" | awk '{for(i=2;i<=NF-1;i++) printf "%s ", $i; print ""}')
+            
+            # Проверяем совпадения
+            local show_relay=false
+            if [[ "$match_context" == "country" ]] || [[ "$match_context" == "city" ]]; then
+                show_relay=true
+            elif echo "$relay_name" | grep -qi "$search_term"; then
+                show_relay=true
+            elif echo "$features" | grep -qi "$search_term"; then
+                show_relay=true
+            fi
+            
+            if [[ "$show_relay" == true && -n "$relay_name" && -n "$relay_ip" ]]; then
+                safe_echo "\n${GREEN}🌍 $current_country${NC} ${YELLOW}📍 $current_city${NC}"
+                echo "    🔗 $relay_name ($relay_ip)"
+                echo "       $features"
+                ((found_count++))
+            fi
+        fi
+    done < "$relays_file"
+    
+    echo "════════════════════════════════════════════════════════════════"
+    if [[ $found_count -eq 0 ]]; then
+        safe_echo "${YELLOW}По запросу '$search_term' релеи не найдены${NC}"
+    else
+        safe_echo "${CYAN}Найдено релеев: $found_count${NC}"
+    fi
+}
+
 # Функция для интерактивного выбора серверов из списка
 interactive_server_selection() {
     local servers_file="${1:-$DNS_SERVERS_FILE}"
@@ -802,19 +1033,22 @@ interactive_server_selection() {
     return 0
 }
 
-# Функция для отображения меню серверов и релеев
+# Новое подменю для просмотра серверов и релеев
 show_servers_and_relays_menu() {
     while true; do
         safe_echo "\n${BLUE}=== ПРОСМОТР СЕРВЕРОВ И РЕЛЕЕВ ===${NC}"
-        echo "1) Показать все серверы по регионам"
-        echo "2) Показать все релеи по регионам"
-        echo "3) Поиск серверов"
-        echo "4) Поиск релеев"
-        echo "0) Назад"
+        echo "1) Показать DNS-серверы по регионам"
+        echo "2) Показать DNS-релеи по регионам"
+        echo "3) Поиск DNS-серверов"
+        echo "4) Поиск DNS-релеев"
+        echo "5) Интерактивный выбор серверов"
+        echo "6) Загрузить свежие списки из интернета"
+        echo "7) Показать статистику серверов"
+        echo "0) Назад в главное меню"
         
-        read -p "Выберите опцию (0-4): " menu_option
+        read -p "Выберите опцию (0-7): " submenu_option
         
-        case $menu_option in
+        case $submenu_option in
             1)
                 display_servers_by_region
                 ;;
@@ -826,6 +1060,19 @@ show_servers_and_relays_menu() {
                 ;;
             4)
                 search_relays
+                ;;
+            5)
+                interactive_server_selection
+                ;;
+            6)
+                if download_dns_lists; then
+                    log "SUCCESS" "Списки серверов и релеев обновлены"
+                else
+                    log "ERROR" "Не удалось обновить списки"
+                fi
+                ;;
+            7)
+                show_servers_statistics
                 ;;
             0)
                 return 0
