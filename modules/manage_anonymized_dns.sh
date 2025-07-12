@@ -744,10 +744,7 @@ configure_regional_anonymized_dns() {
     # Активируем секцию anonymized_dns
     enable_anonymized_dns_section
     
-    # Настраиваем server_names
-    sed -i "s/^server_names = .*/server_names = ['$selected_server']/" "$DNSCRYPT_CONFIG"
-    
-    # Настраиваем маршруты
+    # Настраиваем маршруты (ИСПРАВЛЕННАЯ версия с безопасным созданием файла)
     local relays_formatted=""
     for relay in "${selected_relays[@]}"; do
         local relay_name="${relay%:*}"
@@ -757,17 +754,25 @@ configure_regional_anonymized_dns() {
         relays_formatted+="'$relay_name'"
     done
     
-    local route_config="routes = [
+    # Создаем временный файл для безопасной записи конфигурации маршрутов
+    local temp_routes_file="/tmp/dnscrypt_routes_$$"
+    cat > "$temp_routes_file" << EOF
+routes = [
     { server_name='$selected_server', via=[$relays_formatted] }
-]"
+]
+EOF
     
-    # Заменяем секцию routes
+    # Заменяем секцию routes безопасным способом
     if grep -q "routes = \[" "$DNSCRYPT_CONFIG"; then
-        sed -i "/routes = \[/,/\]/c\\$route_config" "$DNSCRYPT_CONFIG"
+        # Используем perl для более безопасной замены многострочного блока
+        perl -i -pe 'BEGIN{undef $/;} s/routes = \[[^\]]*\]/`cat '"$temp_routes_file"'`/smg' "$DNSCRYPT_CONFIG"
     else
         # Добавляем routes в секцию anonymized_dns
-        sed -i "/^\[anonymized_dns\]/a\\$route_config" "$DNSCRYPT_CONFIG"
+        sed -i "/^\[anonymized_dns\]/r $temp_routes_file" "$DNSCRYPT_CONFIG"
     fi
+    
+    # Удаляем временный файл
+    rm -f "$temp_routes_file"
     
     # Включаем skip_incompatible
     add_config_option "$DNSCRYPT_CONFIG" "anonymized_dns" "skip_incompatible" "true"
