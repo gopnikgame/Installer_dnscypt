@@ -173,9 +173,14 @@ download_main_script() {
 # Финальный вывод
 show_completion() {
     print_header "УСТАНОВКА ЗАВЕРШЕНА"
-    log "SUCCESS" "DNSCrypt Manager версии $INSTALL_VERSION успешно установлен"
+    log "SUCCESS" "Система управления DNSCrypt Manager версии $INSTALL_VERSION успешно загружена"
     echo
-    echo -e "Для запуска используйте команду: ${YELLOW}sudo dnscrypt_manager${NC} или ${YELLOW}sudo dnscrypt-manager${NC}"
+    echo -e "${GREEN}✅ Система управления успешно установлена и готова к использованию!${NC}"
+    echo
+    echo -e "Для запуска используйте одну из команд:"
+    echo -e "  ${YELLOW}sudo dnscrypt_manager${NC}"
+    echo -e "  ${YELLOW}sudo dnscrypt-manager${NC}"
+    echo
     echo -e "Все модули будут автоматически загружены при первом запуске"
     echo
 }
@@ -200,22 +205,6 @@ main() {
     
     if download_main_script; then
         show_completion
-        
-        print_step "Перезагрузка системы для применения изменений..."
-        echo -e "${YELLOW}Для корректной работы рекомендуется перезагрузить систему${NC}"
-        echo -e "После перезагрузки запустите: ${GREEN}sudo dnscrypt_manager${NC}"
-        echo
-        
-        # Предлагаем перезагрузку
-        read -p "Перезагрузить систему сейчас? (y/N): " reboot_choice
-        if [[ "$reboot_choice" =~ ^[Yy]$ ]]; then
-            echo -e "${YELLOW}Система будет перезагружена...${NC}"
-            sleep 2
-            reboot
-        else
-            echo -e "${YELLOW}Помните, что для корректной работы может потребоваться перезагрузка.${NC}"
-            echo -e "Чтобы запустить DNSCrypt Manager после установки, выполните: ${GREEN}sudo dnscrypt_manager${NC}"
-        fi
     else
         log "ERROR" "Установка не завершена из-за ошибок"
         exit 1
