@@ -136,18 +136,33 @@ download_latest_release() {
     workdir="$(mktemp -d)"
     
     # Получаем URL последней версии
-    log "INFO" "Получение информации о последней версии"
+    log "INFO" "Получение информации о последней версии через API GitHub"
     download_url="$(curl -sL "$LATEST_URL" | grep "dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}-" | grep "browser_download_url" | head -1 | cut -d \" -f 4)"
     
     if [ -z "$download_url" ]; then
-        log "ERROR" "Не удалось получить URL для загрузки DNSCrypt-proxy"
-        rm -rf "$workdir"
-        return 1
+        log "WARN" "Не удалось получить URL через API. Попытка загрузки резервной версии."
+        
+        local fallback_version="2.1.12"
+        local fallback_base_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${fallback_version}"
+        local fallback_file="dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}-${fallback_version}.tar.gz"
+        
+        download_url="${fallback_base_url}/${fallback_file}"
+        
+        log "INFO" "Используем резервный URL: $download_url"
+        
+        # Проверяем доступность резервного URL
+        if ! curl -s --head "$download_url" | head -n 1 | grep -E "HTTP/(1.1|2) 302" > /dev/null; then
+            log "ERROR" "Резервный URL также недоступен. Не удалось получить URL для загрузки DNSCrypt-proxy."
+            rm -rf "$workdir"
+            return 1
+        fi
+        remote_version=$fallback_version
+    else
+        # Получаем версию
+        remote_version=$(curl -sL "$LATEST_URL" | grep "tag_name" | head -1 | cut -d \" -f 4)
     fi
-    
-    # Получаем версию
-    remote_version=$(curl -sL "$LATEST_URL" | grep "tag_name" | head -1 | cut -d \" -f 4)
-    log "INFO" "Найдена последняя версия DNSCrypt-proxy: $remote_version"
+
+    log "INFO" "Найдена версия DNSCrypt-proxy: $remote_version"
     
     # Загружаем архив
     download_file="dnscrypt-proxy-update.tar.gz"
@@ -161,8 +176,9 @@ download_latest_release() {
     # Проверка подписи, если установлен minisign
     if [ -x "$(command -v minisign)" ]; then
         log "INFO" "Проверка цифровой подписи"
-        if ! curl --request GET -sL --url "${download_url}.minisig" --output "$workdir/${download_file}.minisig"; then
-            log "WARN" "Не удалось загрузить файл подписи"
+        local minisig_url="${download_url}.minisig"
+        if ! curl --request GET -sL --url "$minisig_url" --output "$workdir/${download_file}.minisig"; then
+            log "WARN" "Не удалось загрузить файл подписи с ${minisig_url}"
         else
             if ! minisign -Vm "$workdir/$download_file" -P "$DNSCRYPT_PUBLIC_KEY"; then
                 log "ERROR" "Проверка цифровой подписи не удалась. Установка прервана"
@@ -246,6 +262,49 @@ install_from_archive() {
     fi
     
     log "SUCCESS" "DNSCrypt-proxy установлен в $INSTALL_DIR"
+    return 0
+}
+
+# Установка через пакетный менеджер
+install_from_package_manager() {
+    log "INFO" "Попытка установки dnscrypt-proxy через пакетный менеджер (apt)"
+    
+    if ! command -v apt-get &>/dev/null; then
+        log "ERROR" "apt не найден. Установка через пакетный менеджер невозможна."
+        return 1
+    fi
+    
+    if ! apt-get install -y dnscrypt-proxy; then
+        log "ERROR" "Не удалось установить dnscrypt-proxy через apt."
+        return 1
+    fi
+    
+    # Определяем, куда был установлен бинарный файл
+    local installed_path=$(command -v dnscrypt-proxy)
+    if [ -z "$installed_path" ]; then
+        log "ERROR" "Не удалось найти бинарный файл dnscrypt-proxy после установки."
+        return 1
+    fi
+    
+    # Адаптируем переменные для дальнейшей настройки
+    # Вместо копирования в /opt, мы будем использовать путь из apt
+    local real_install_dir=$(dirname "$installed_path")
+    # Создаем символическую ссылку для совместимости с остальной частью скрипта
+    if [ "$real_install_dir" != "$INSTALL_DIR" ]; then
+        ln -sfn "$real_install_dir" "$INSTALL_DIR"
+    fi
+    
+    # Проверяем, что конфигурационная директория существует
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+    fi
+    
+    log "SUCCESS" "dnscrypt-proxy успешно установлен через apt."
+    log "INFO" "Путь установки: $real_install_dir"
+    
+    # Устанавливаем флаг, что установка была из пакета
+    INSTALL_FROM_PACKAGE=true
+    
     return 0
 }
 
@@ -906,7 +965,7 @@ install_dependencies() {
 
 # Главная функция установки
 install_dnscrypt() {
-    print_header "УСТАНОВКА DNSCRYPT-PROXY ИЗ GITHUB"
+    print_header "УСТАНОВКА DNSCRYPT-PROXY"
     
     # Создаем директорию для временных бэкапов
     mkdir -p "${TEMP_BACKUP_DIR}"
@@ -947,37 +1006,41 @@ install_dnscrypt() {
     
     # Очищаем глобальную переменную перед использованием
     DOWNLOADED_ARCHIVE_PATH=""
-    
+    INSTALL_FROM_PACKAGE=false
+
     # Загрузка последней версии
     if ! download_latest_release; then
-        log "ERROR" "Ошибка загрузки DNSCrypt-proxy"
-        rollback_changes
-        return 1
+        log "WARN" "Не удалось загрузить DNSCrypt-proxy из GitHub. Попытка установки из пакетного менеджера..."
+        if ! install_from_package_manager; then
+            log "ERROR" "Все способы установки не удались."
+            rollback_changes
+            return 1
+        fi
+    else
+        # Проверка получения пути к архиву
+        if [ -z "$DOWNLOADED_ARCHIVE_PATH" ] || [ ! -f "$DOWNLOADED_ARCHIVE_PATH" ]; then
+            log "ERROR" "Не удалось получить доступ к загруженному архиву"
+            rollback_changes
+            return 1
+        fi
+        
+        # Устанавливаем DNSCrypt из архива
+        if ! install_from_archive "$DOWNLOADED_ARCHIVE_PATH"; then
+            log "ERROR" "Ошибка установки DNSCrypt-proxy из архива"
+            rollback_changes
+            return 1
+        fi
+        
+        # Добавляем действие отката
+        ROLLBACK_NEEDED=true
+        ROLLBACK_ACTIONS+=("remove_files")
+        
+        # Настройка capabilities (НОВАЯ ФУНКЦИЯ)
+        setup_capabilities || {
+            log "WARN" "Проблемы с настройкой capabilities, продолжаем..."
+        }
     fi
-    
-    # Проверка получения пути к архиву
-    if [ -z "$DOWNLOADED_ARCHIVE_PATH" ] || [ ! -f "$DOWNLOADED_ARCHIVE_PATH" ]; then
-        log "ERROR" "Не удалось получить доступ к загруженному архиву"
-        rollback_changes
-        return 1
-    fi
-    
-    # Устанавливаем DNSCrypt из архива
-    if ! install_from_archive "$DOWNLOADED_ARCHIVE_PATH"; then
-        log "ERROR" "Ошибка установки DNSCrypt-proxy из архива"
-        rollback_changes
-        return 1
-    fi
-    
-    # Добавляем действие отката
-    ROLLBACK_NEEDED=true
-    ROLLBACK_ACTIONS+=("remove_files")
-    
-    # Настройка capabilities (НОВАЯ ФУНКЦИЯ)
-    setup_capabilities || {
-        log "WARN" "Проблемы с настройкой capabilities, продолжаем..."
-    }
-    
+
     # Настройка конфигурации
     configure_dnscrypt || {
         log "ERROR" "Ошибка настройки конфигурации DNSCrypt"
@@ -985,12 +1048,16 @@ install_dnscrypt() {
         return 1
     }
     
-    # Создание службы systemd
-    create_service || {
-        log "ERROR" "Ошибка создания службы systemd"
-        rollback_changes
-        return 1
-    }
+    # Создание службы systemd (пропускаем, если установка была из пакета, т.к. он создает свою службу)
+    if [ "$INSTALL_FROM_PACKAGE" = false ]; then
+        create_service || {
+            log "ERROR" "Ошибка создания службы systemd"
+            rollback_changes
+            return 1
+        }
+    else
+        log "INFO" "Пропускаем создание службы systemd, так как установка была из пакета."
+    fi
     
     # Настройка DNS
     configure_resolved || {
