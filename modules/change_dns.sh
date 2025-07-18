@@ -126,7 +126,7 @@ find_servers_by_country() {
     local servers_file="$2"
     
     if [[ ! -f "$servers_file" ]]; then
-        log "ERROR" "Файл серверов не найден: $servers_file"
+        log "ERROR" "Файл серверов не найден: $servers_file" >&2
         return 1
     fi
     
@@ -147,7 +147,7 @@ find_servers_by_country() {
             # Проверяем, соответствует ли страна искомой (нечувствительно к регистру)
             if echo "$current_country" | grep -qi "$country"; then
                 in_target_country=true
-                log "DEBUG" "Найдена страна: $current_country"
+                log "DEBUG" "Найдена страна: $current_country" >&2
             else
                 in_target_country=false
             fi
@@ -168,7 +168,7 @@ find_servers_by_country() {
             
             if [[ -n "$server_name" && -n "$server_ip" ]]; then
                 found_servers+=("$server_name:$server_ip")
-                log "DEBUG" "Найден сервер: $server_name ($server_ip)"
+                log "DEBUG" "Найден сервер: $server_name ($server_ip)" >&2
             fi
         fi
     done < "$servers_file"
@@ -176,9 +176,9 @@ find_servers_by_country() {
     # Выводим найденные серверы
     if [[ ${#found_servers[@]} -gt 0 ]]; then
         printf '%s\n' "${found_servers[@]}"
-        log "INFO" "Найдено серверов в стране '$country': ${#found_servers[@]}"
+        log "INFO" "Найдено серверов в стране '$country': ${#found_servers[@]}" >&2
     else
-        log "WARN" "Серверы в стране '$country' не найдены"
+        log "WARN" "Серверы в стране '$country' не найдены" >&2
     fi
     
     return 0
