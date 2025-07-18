@@ -30,7 +30,7 @@ DNSCRYPT_PUBLIC_KEY="RWTk1xXqcTODeYttYMCMLo0YJHaFEHn7a3akqHlb/7QvIQXHVPxKbjB5"
 PLATFORM="linux"
 if [ "$(uname -m)" = "x86_64" ]; then
     CPU_ARCH="x86_64"
-elif [ "$(uname -m)" = "aarch64" ]; then
+elif [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "armv8" ]; then
     CPU_ARCH="arm64"
 elif [ "$(uname -m)" = "armv7l" ]; then
     CPU_ARCH="arm"
@@ -63,6 +63,7 @@ rollback_changes() {
                 if [ -f "${TEMP_BACKUP_DIR}/resolv.conf" ]; then
                     chattr -i /etc/resolv.conf 2>/dev/null || true
                     cp "${TEMP_BACKUP_DIR}/resolv.conf" /etc/resolv.conf
+                    # Не ставим атрибут +i обратно, так как система может им управлять
                     log "SUCCESS" "resolv.conf восстановлен"
                 else
                     log "WARN" "Резервная копия resolv.conf не найдена"
@@ -137,7 +138,18 @@ download_latest_release() {
     
     # Получаем URL последней версии
     log "INFO" "Получение информации о последней версии через API GitHub"
-    download_url="$(curl -sL "$LATEST_URL" | grep "dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}-" | grep "browser_download_url" | head -1 | cut -d \" -f 4)"
+    
+    # Проверяем наличие jq
+    if ! command -v jq &> /dev/null; then
+        log "INFO" "Утилита jq не найдена, попытка установки..."
+        install_package "jq" || log "WARN" "Не удалось установить jq. Возвращаемся к старому методу."
+    fi
+
+    if command -v jq &> /dev/null; then
+        download_url=$(curl -sL "$LATEST_URL" | jq -r ".assets[] | select(.name | test(\"dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}.*tar.gz$\")) | .browser_download_url" | head -n 1)
+    else
+        download_url="$(curl -sL "$LATEST_URL" | grep "dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}-" | grep "browser_download_url" | head -1 | cut -d \" -f 4)"
+    fi
     
     if [ -z "$download_url" ]; then
         log "WARN" "Не удалось получить URL через API. Попытка загрузки резервной версии."
@@ -698,18 +710,27 @@ check_required_ports() {
     
     local port_busy=false
     
-    # Проверяем доступность команды lsof
-    if ! command -v lsof &>/dev/null; then
-        log "WARN" "Команда lsof не найдена, устанавливаем..."
+    # Проверяем, занят ли порт, предпочитая ss, если доступен
+    if command -v ss &>/dev/null; then
+        if ss -tuln | grep -q ":53\s"; then
+            port_busy=true
+        fi
+    elif command -v lsof &>/dev/null; then
+        if lsof -i :53 >/dev/null 2>&1; then
+            port_busy=true
+        fi
+    else
+        log "WARN" "Команды lsof и ss не найдены, устанавливаем lsof..."
         if ! install_package "lsof"; then
             log "ERROR" "Не удалось установить lsof, пропускаем проверку портов"
-            return 0
+            return 0 # Возвращаем успех, чтобы не прерывать установку
+        fi
+        if lsof -i :53 >/dev/null 2>&1; then
+            port_busy=true
         fi
     fi
     
-    # Проверяем, занят ли порт
-    if lsof -i :53 >/dev/null 2>&1; then
-        port_busy=true
+    if [ "$port_busy" = true ]; then
         log "WARN" "Порт 53 занят другим процессом"
         
         # Сохраняем текущие DNS-серверы для использования после установки
@@ -810,8 +831,14 @@ check_required_ports() {
                 else
                     echo "$process (PID: $process_pid)" >> "${TEMP_BACKUP_DIR}/unknown_processes.txt"
                     
-                    # Спрашиваем пользователя, хочет ли он завершить процесс
-                    read -p "Хотите завершить процесс $process (PID: $process_pid), занимающий порт 53? (y/n): " kill_process
+                    local kill_process="n"
+                    # Спрашиваем пользователя, если терминал интерактивный
+                    if [ -t 1 ]; then
+                        read -p "Хотите завершить процесс $process (PID: $process_pid), занимающий порт 53? (y/n): " kill_process
+                    else
+                        log "WARN" "Неинтерактивный режим, процесс $process не будет завершен автоматически."
+                    fi
+                    
                     if [[ "${kill_process,,}" == "y" ]]; then
                         log "INFO" "Завершение процесса $process (PID: $process_pid)..."
                         kill -15 "$process_pid" || {
@@ -887,23 +914,22 @@ install_dependencies() {
         "tar"
         "lsof"
         "ca-certificates"
-        "dig" # Для проверки DNS
     )
     
     # Проверка доступности менеджера пакетов
     local pkg_manager=""
     if command -v apt-get &>/dev/null; then
         pkg_manager="apt"
-        # Добавляем пакет для dig
-        packages=(${packages[@]/dig/dnsutils})
+        packages+=("dnsutils") # для dig
+        packages+=("libcap2-bin") # для setcap
     elif command -v yum &>/dev/null; then
         pkg_manager="yum"
-        # Добавляем пакет для dig в RedHat/CentOS
-        packages=(${packages[@]/dig/bind-utils})
+        packages+=("bind-utils") # для dig
+        packages+=("libcap") # для setcap
     elif command -v dnf &>/dev/null; then
         pkg_manager="dnf"
-        # Добавляем пакет для dig в Fedora
-        packages=(${packages[@]/dig/bind-utils})
+        packages+=("bind-utils") # для dig
+        packages+=("libcap") # для setcap
     else
         log "WARN" "Неизвестный менеджер пакетов, пропускаем установку зависимостей"
         return 1
@@ -912,9 +938,22 @@ install_dependencies() {
     # Проверка наличия пакетов
     local missing_packages=()
     for pkg in "${packages[@]}"; do
-        if ! command -v "$pkg" &>/dev/null && [ "$pkg" != "dig" ]; then
-            if ! dpkg -s "$pkg" &>/dev/null 2>&1 && ! rpm -q "$pkg" &>/dev/null 2>&1; then
-                missing_packages+=("$pkg")
+        # Проверяем исполняемые файлы для некоторых пакетов
+        local cmd_to_check="$pkg"
+        case "$pkg" in
+            "dnsutils"|"bind-utils") cmd_to_check="dig" ;;
+            "libcap2-bin"|"libcap") cmd_to_check="setcap" ;;
+            "ca-certificates") cmd_to_check="update-ca-certificates" ;;
+        esac
+
+        if ! command -v "$cmd_to_check" &>/dev/null; then
+             # Для Debian/Ubuntu проверяем статус пакета, для других - просто добавляем
+            if [ "$pkg_manager" = "apt" ]; then
+                if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
+                    missing_packages+=("$pkg")
+                fi
+            else
+                 missing_packages+=("$pkg")
             fi
         fi
     done
@@ -1163,7 +1202,7 @@ EOF
                 cat > /etc/resolv.conf << EOF
 # Generated by DNSCrypt Manager (port 5353)
 nameserver 127.0.0.1
-port 5353
+# port 5353 - 'port' is not a standard option, resolver should handle it
 options edns0
 EOF
                 chattr +i /etc/resolv.conf 2>/dev/null || true

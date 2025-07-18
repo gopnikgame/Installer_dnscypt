@@ -455,6 +455,11 @@ configure_auto_geo_servers() {
     local full_server_list="[$selected_server, $backup_servers]"
     sed -i "s/server_names = .*/server_names = $full_server_list/" "$DNSCRYPT_CONFIG"
     
+    # Очищаем список заблокированных серверов, чтобы избежать конфликтов
+    if grep -q "disabled_server_names = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/disabled_server_names = .*/disabled_server_names = []/" "$DNSCRYPT_CONFIG"
+    fi
+
     # Включаем DoH серверы (cloudflare, google - DoH серверы)
     if ! grep -q "^doh_servers = true" "$DNSCRYPT_CONFIG"; then
         if grep -q "^doh_servers = " "$DNSCRYPT_CONFIG"; then
@@ -466,10 +471,10 @@ configure_auto_geo_servers() {
     fi
     
     # Настраиваем балансировку нагрузки
-    if grep -q "lb_strategy = " "$DNSCRYPT_CONFIG"; then
-        sed -i "s/lb_strategy = .*/lb_strategy = 'ph'/" "$DNSCRYPT_CONFIG"
+    if grep -q "^lb_strategy = " "$DNSCRYPT_CONFIG"; then
+        sed -i "s/^lb_strategy = .*/lb_strategy = 'ph'/" "$DNSCRYPT_CONFIG"
     else
-        sed -i "/server_names = /a lb_strategy = 'ph'" "$DNSCRYPT_CONFIG"
+        sed -i "/^server_names = /a lb_strategy = 'ph'" "$DNSCRYPT_CONFIG"
     fi
     
     # Настраиваем таймаут
@@ -707,10 +712,10 @@ configure_geo_servers() {
         fi
         
         # Настраиваем балансировку нагрузки
-        if grep -q "lb_strategy = " "$DNSCRYPT_CONFIG"; then
-            sed -i "s/lb_strategy = .*/lb_strategy = 'ph'/" "$DNSCRYPT_CONFIG"
+        if grep -q "^lb_strategy = " "$DNSCRYPT_CONFIG"; then
+            sed -i "s/^lb_strategy = .*/lb_strategy = 'ph'/" "$DNSCRYPT_CONFIG"
         else
-            sed -i "/server_names = /a lb_strategy = 'ph'" "$DNSCRYPT_CONFIG"
+            sed -i "/^server_names = /a lb_strategy = 'ph'" "$DNSCRYPT_CONFIG"
         fi
         
         # Настраиваем таймаут
