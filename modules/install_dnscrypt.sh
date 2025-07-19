@@ -154,7 +154,8 @@ download_latest_release() {
     if [ -z "$download_url" ]; then
         log "WARN" "Не удалось получить URL через API. Попытка загрузки резервной версии."
         
-        local fallback_version="2.1.12"
+        # Используем более новую и стабильную резервную версию
+        local fallback_version="2.1.5"
         local fallback_base_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${fallback_version}"
         local fallback_file="dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}-${fallback_version}.tar.gz"
         
@@ -163,7 +164,7 @@ download_latest_release() {
         log "INFO" "Используем резервный URL: $download_url"
         
         # Проверяем доступность резервного URL
-        if ! curl -s --head "$download_url" | head -n 1 | grep -E "HTTP/(1.1|2) 302" > /dev/null; then
+        if ! curl -s --head "$download_url" | head -n 1 | grep -E "HTTP/(1.1|2) (302|200)" > /dev/null; then
             log "ERROR" "Резервный URL также недоступен. Не удалось получить URL для загрузки DNSCrypt-proxy."
             rm -rf "$workdir"
             return 1
@@ -763,6 +764,17 @@ check_required_ports() {
                 log "INFO" "Останавливаем и отключаем systemd-resolved..."
                 systemctl stop systemd-resolved.service 2>/dev/null || true
                 systemctl disable systemd-resolved.service 2>/dev/null || true
+                
+                # Устанавливаем временный DNS для продолжения работы скрипта
+                log "INFO" "Установка временного DNS-сервера для обеспечения сетевого подключения"
+                chattr -i /etc/resolv.conf 2>/dev/null || true
+                rm -f /etc/resolv.conf
+                cat > /etc/resolv.conf << EOF
+# Temporary resolv.conf by DNSCrypt installer
+nameserver ${BACKUP_DNS_SERVER:-8.8.8.8}
+nameserver 1.1.1.1
+options timeout:2 attempts:3
+EOF
                 
                 # Дополнительно убиваем процесс, если он все еще работает
                 if [ -n "$process_pid" ]; then
