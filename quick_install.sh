@@ -1,17 +1,18 @@
-#!/bin/bash
+#!/bin/sh
+# Compatible with bash and ash (BusyBox)
 
-# Version: 1.2.0
+# Version: 1.2.1
 # Author: gopnikgame
 # Created: 2025-06-22
 # Last Modified: 2025-12-12
 
 # Подгрузка общих функций
 SCRIPT_DIR="/usr/local/dnscrypt-scripts"
-source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
+source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
     # Если библиотека не найдена, создаем временную директорию и загружаем
     mkdir -p "${SCRIPT_DIR}/lib"
     wget -q -O "${SCRIPT_DIR}/lib/common.sh" "https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/common.sh" 
-    source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
+    source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
         # Если не удалось загрузить, создаем минимальные необходимые функции
         RED='\033[0;31m'
         GREEN='\033[0;32m'
@@ -21,16 +22,16 @@ source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
         NC='\033[0m'
         
         print_header() {
-            echo -e "\n${BLUE}=== $1 ===${NC}\n"
+            printf "\n${BLUE}=== %s ===${NC}\n\n" "$1"
         }
         
         log() {
-            echo -e "$(date '+%Y-%m-%d %H:%M:%S') [$1] $2"
+            printf "%s [%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2"
         }
         
         # Проверка root-прав
         check_root() {
-            if [[ $EUID -ne 0 ]]; then
+            if [ "$(id -u)" -ne 0 ]; then
                 log "ERROR" "${RED}Этот скрипт должен быть запущен с правами root${NC}"
                 exit 1
             fi
@@ -52,7 +53,7 @@ source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
         
         check_dependencies() {
             for dep in "$@"; do
-                if ! command -v "$dep" &>/dev/null; then
+                if ! command -v "$dep" >/dev/null 2>&1; then
                     log "ERROR" "${RED}Не найдена зависимость: $dep${NC}"
                     exit 1
                 fi
@@ -62,9 +63,9 @@ source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
 }
 
 # Константы
-INSTALL_VERSION="1.2.0"
+INSTALL_VERSION="1.2.1"
 MAIN_SCRIPT_URL="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/main.sh"
-SCRIPT_DIR="/usr/local/dnscrypt-scripts"  # Единый путь установки
+SCRIPT_DIR="/usr/local/dnscrypt-scripts"
 MODULES_DIR="${SCRIPT_DIR}/modules"
 LIB_DIR="${SCRIPT_DIR}/lib"
 LOG_DIR="/var/log/dnscrypt"
@@ -81,49 +82,47 @@ create_directories() {
     log "SUCCESS" "Директории созданы"
 }
 
-# Функция для отображения шагов (оставляем для удобства)
+# Функция для отображения шагов
 print_step() {
-    echo -e "${YELLOW}➜${NC} $1"
+    printf "${YELLOW}➜${NC} %s\n" "$1"
 }
 
 # Загрузка библиотек
 download_libraries() {
     print_step "Загрузка библиотек..."
     
-    local libraries=("common.sh" "anonymized_dns.sh" "diagnostic.sh")
+    local libraries="common.sh anonymized_dns.sh diagnostic.sh"
     local success=true
     
-    for lib in "${libraries[@]}"; do
+    for lib in $libraries; do
         local lib_url="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/${lib}"
         local lib_path="${LIB_DIR}/${lib}"
         
-        echo -n "Загрузка ${lib}... "
+        printf "Загрузка %s... " "$lib"
         if wget -q --tries=3 --timeout=10 -O "$lib_path" "$lib_url"; then
-            echo -e "${GREEN}Успешно${NC}"
+            printf "${GREEN}Успешно${NC}\n"
             # Проверка, что библиотека не пуста
             if [ ! -s "$lib_path" ]; then
-                echo -e "${YELLOW}Файл пуст, создаем заглушку${NC}"
-                echo "#!/bin/bash" > "$lib_path"
-                echo "# ${lib} - Пустая библиотека" >> "$lib_path"
+                printf "${YELLOW}Файл пуст, создаем заглушку${NC}\n"
+                printf "#!/bin/sh\n# %s - Пустая библиотека\n" "$lib" > "$lib_path"
             fi
         else
-            echo -e "${RED}Ошибка${NC}"
+            printf "${RED}Ошибка${NC}\n"
             log "ERROR" "Ошибка при загрузке библиотеки ${lib}"
             
             # Создаем заглушку для библиотеки
-            echo "#!/bin/bash" > "$lib_path"
-            echo "# ${lib} - Пустая библиотека, создана автоматически" >> "$lib_path"
+            printf "#!/bin/sh\n# %s - Пустая библиотека, создана автоматически\n" "$lib" > "$lib_path"
             
             success=false
         fi
     done
     
-    if [ "$success" = true ]; then
+    if [ "$success" = "true" ]; then
         log "SUCCESS" "Все библиотеки успешно загружены"
         return 0
     else
         log "WARN" "Некоторые библиотеки могли быть не загружены, созданы заглушки"
-        return 0 # Не считаем это критической ошибкой
+        return 0
     fi
 }
 
@@ -136,6 +135,7 @@ create_symlinks() {
     
     # Создаем символические ссылки для всех библиотек
     for lib_file in "${LIB_DIR}"/*.sh; do
+        [ -f "$lib_file" ] || continue
         local lib_name=$(basename "$lib_file")
         ln -sf "$lib_file" "/usr/local/bin/lib/$lib_name"
     done
@@ -155,7 +155,7 @@ patch_main_script() {
     fi
     
     # Добавляем строку для загрузки общей библиотеки с абсолютными путями
-    sed -i '5i# Добавляем абсолютный путь к библиотекам\nif [ ! -f "${SCRIPT_DIR}/lib/common.sh" ]; then\n  SCRIPT_DIR="/usr/local/dnscrypt-scripts"\nfi' "${SCRIPT_DIR}/main.sh"
+    sed -i '5i# Добавляем абсолютный путь к библиотекам\nif [ ! -f "${SCRIPT_DIR}/lib/common.sh" ]; then\n  SCRIPT_DIR="/usr/local/dnscrypt-scripts"\nfi' "${SCRIPT_DIR}/main.sh" 2>/dev/null || true
     
     log "SUCCESS" "Пути в основном скрипте скорректированы"
     return 0
@@ -188,30 +188,30 @@ download_main_script() {
 show_completion() {
     print_header "УСТАНОВКА ЗАВЕРШЕНА"
     log "SUCCESS" "Система управления DNSCrypt Manager версии $INSTALL_VERSION успешно загружена"
-    echo
-    echo -e "${GREEN}✅ Система управления успешно установлена и готова к использованию!${NC}"
-    echo
+    printf "\n"
+    printf "${GREEN}✅ Система управления успешно установлена и готова к использованию!${NC}\n"
+    printf "\n"
     
     # Определяем платформу для корректного вывода команд
     local platform=$(detect_platform 2>/dev/null || echo "unknown")
     
     if [ "$platform" = "openwrt" ]; then
-        echo -e "Для запуска используйте:"
-        echo -e "  ${YELLOW}dnscrypt_manager${NC}"
-        echo -e "  ${YELLOW}dnscrypt-manager${NC}"
-        echo -e "  или"
-        echo -e "  ${YELLOW}bash ${SCRIPT_DIR}/main.sh${NC}"
+        printf "Для запуска используйте:\n"
+        printf "  ${YELLOW}dnscrypt_manager${NC}\n"
+        printf "  ${YELLOW}dnscrypt-manager${NC}\n"
+        printf "  или\n"
+        printf "  ${YELLOW}sh %s/main.sh${NC}\n" "$SCRIPT_DIR"
     else
-        echo -e "Для запуска используйте одну из команд:"
-        echo -e "  ${YELLOW}sudo dnscrypt_manager${NC}"
-        echo -e "  ${YELLOW}sudo dnscrypt-manager${NC}"
-        echo -e "  или"
-        echo -e "  ${YELLOW}sudo bash ${SCRIPT_DIR}/main.sh${NC}"
+        printf "Для запуска используйте одну из команд:\n"
+        printf "  ${YELLOW}sudo dnscrypt_manager${NC}\n"
+        printf "  ${YELLOW}sudo dnscrypt-manager${NC}\n"
+        printf "  или\n"
+        printf "  ${YELLOW}sudo bash %s/main.sh${NC}\n" "$SCRIPT_DIR"
     fi
     
-    echo
-    echo -e "Все модули будут автоматически загружены при первом запуске"
-    echo
+    printf "\n"
+    printf "Все модули будут автоматически загружены при первом запуске\n"
+    printf "\n"
 }
 
 # Основная функция
@@ -229,7 +229,10 @@ main() {
         check_dependencies wget grep
     else
         # На Linux проверяем включая systemctl
-        check_dependencies wget systemctl curl grep
+        check_dependencies wget grep
+        # curl опционален
+        command -v systemctl >/dev/null 2>&1 || log "WARN" "systemctl не найден"
+        command -v curl >/dev/null 2>&1 || log "WARN" "curl не найден"
     fi
     
     create_directories
