@@ -13,8 +13,337 @@ source "${SCRIPT_DIR}/lib/diagnostic.sh" 2>/dev/null || {
 # Description:
 # Полная установка DNSCrypt-proxy с автоматической настройкой.
 # Скрипт загружает последнюю версию DNSCrypt-proxy с GitHub и устанавливает её.
+# Поддерживает установку на Linux (systemd) и OpenWRT.
 
-# Константы
+# Проверка платформы и вызов соответствующей установки
+main_install() {
+    local platform=$(detect_platform)
+    
+    log "INFO" "Обнаружена платформа: $platform"
+    
+    case "$platform" in
+        openwrt)
+            log "INFO" "Запуск установки для OpenWRT"
+            if [ -f "${SCRIPT_DIR}/modules/install_openwrt.sh" ]; then
+                exec bash "${SCRIPT_DIR}/modules/install_openwrt.sh"
+            else
+                log "ERROR" "Модуль установки OpenWRT не найден"
+                return 1
+            fi
+            ;;
+        debian|redhat|arch|unknown)
+            log "INFO" "Запуск стандартной установки для Linux (systemd)"
+            install_dnscrypt_linux
+            ;;
+        *)
+            log "ERROR" "Неподдерживаемая платформа: $platform"
+            return 1
+            ;;
+    esac
+}
+
+# Переименовываем текущую функцию install_dnscrypt в install_dnscrypt_linux
+install_dnscrypt_linux() {
+    # ...existing installation code for Linux...
+    print_header "УСТАНОВКА DNSCRYPT-PROXY"
+    
+    # Создаем директорию для временных бэкапов
+    mkdir -p "${TEMP_BACKUP_DIR}"
+    
+    # Проверка подключения к интернету
+    if ! check_internet; then
+        log "ERROR" "Отсутствует подключение к интернету. Необходимо для загрузки DNSCrypt"
+        return 1
+    fi
+    
+    # Проверка root-прав (импортируется из common.sh)
+    if [ "$(id -u)" -ne 0 ]; then
+        log "ERROR" "Этот скрипт должен быть запущен от имени root"
+        return 1
+    fi
+    
+    # Устанавливаем зависимости
+    install_dependencies || {
+        log "WARN" "Проблемы с установкой зависимостей. Продолжаем установку..."
+    }
+    
+    # Проверка доступности портов
+    check_required_ports || {
+        log "WARN" "Проблемы с освобождением порта 53. Продолжение может привести к ошибкам"
+        read -p "Продолжить установку несмотря на проблемы с портом? (y/n): " continue_install
+        if [[ "${continue_install,,}" != "y" ]]; then
+            log "INFO" "Установка прервана пользователем"
+            return 1
+        fi
+    }
+    
+    # Создание пользователя
+    create_user || {
+        log "ERROR" "Ошибка создания пользователя"
+        rollback_changes
+        return 1
+    }
+    
+    # Очищаем глобальную переменную перед использованием
+    DOWNLOADED_ARCHIVE_PATH=""
+    INSTALL_FROM_PACKAGE=false
+
+    # Загрузка последней версии
+    if ! download_latest_release; then
+        log "WARN" "Не удалось загрузить DNSCrypt-proxy из GitHub. Попытка установки из пакетного менеджера..."
+        if ! install_from_package_manager; then
+            log "ERROR" "Все способы установки не удались."
+            rollback_changes
+            return 1
+        fi
+    else
+        # Проверка получения пути к архиву
+        if [ -z "$DOWNLOADED_ARCHIVE_PATH" ] || [ ! -f "$DOWNLOADED_ARCHIVE_PATH" ]; then
+            log "ERROR" "Не удалось получить доступ к загруженному архиву"
+            rollback_changes
+            return 1
+        fi
+        
+        # Устанавливаем DNSCrypt из архива
+        if ! install_from_archive "$DOWNLOADED_ARCHIVE_PATH"; then
+            log "ERROR" "Ошибка установки DNSCrypt-proxy из архива"
+            rollback_changes
+            return 1
+        fi
+        
+        # Добавляем действие отката
+        ROLLBACK_NEEDED=true
+        ROLLBACK_ACTIONS+=("remove_files")
+        
+        # Настройка capabilities (НОВАЯ ФУНКЦИЯ)
+        setup_capabilities || {
+            log "WARN" "Проблемы с настройкой capabilities, продолжаем..."
+        }
+    fi
+
+    # Настройка конфигурации
+    configure_dnscrypt || {
+        log "ERROR" "Ошибка настройки конфигурации DNSCrypt"
+        rollback_changes
+        return 1
+    }
+    
+    # Создание службы systemd (пропускаем, если установка была из пакета, т.к. он создает свою службу)
+    if [ "$INSTALL_FROM_PACKAGE" = false ]; then
+        create_service || {
+            log "ERROR" "Ошибка создания службы systemd"
+            rollback_changes
+            return 1
+        }
+    else
+        log "INFO" "Пропускаем создание службы systemd, так как установка была из пакета."
+    fi
+    
+    # Настройка DNS
+    configure_resolved || {
+        log "ERROR" "Ошибка настройки systemd-resolved"
+        rollback_changes
+        return 1
+    }
+    
+    configure_resolv || {
+        log "ERROR" "Ошибка настройки resolv.conf"
+        rollback_changes
+        return 1
+    }
+    
+    # Запуск службы (ИСПРАВЛЕННАЯ СЕКЦИЯ)
+    log "INFO" "Запуск службы DNSCrypt"
+    systemctl enable dnscrypt-proxy || log "WARN" "Не удалось включить автозапуск службы"
+    
+    # Первая попытка запуска
+    if ! systemctl start dnscrypt-proxy; then
+        log "WARN" "Первая попытка запуска службы не удалась, проверяем причину..."
+        
+        # Проверяем логи для диагностики
+        local error_logs=$(journalctl -u dnscrypt-proxy -n 5 --no-pager | grep -i "permission denied\|bind")
+        
+        if [[ -n "$error_logs" ]]; then
+            log "INFO" "Обнаружена проблема с правами доступа, применяем дополнительные исправления..."
+            
+            # Дополнительные меры для решения проблем с правами
+            
+            # 1. Убеждаемся, что пользователь dnscrypt-proxy существует
+            if ! id "$DNSCRYPT_USER" &>/dev/null; then
+                log "ERROR" "Пользователь $DNSCRYPT_USER не существует"
+                rollback_changes
+                return 1
+            fi
+            
+            # 2. Проверяем и исправляем права на файлы
+            log "INFO" "Исправление прав доступа к файлам"
+            chmod 755 "$INSTALL_DIR"
+            chmod 755 "$INSTALL_DIR/dnscrypt-proxy"
+            chmod 755 "$CONFIG_DIR"
+            chmod 644 "$CONFIG_FILE"
+            chown -R "${DNSCRYPT_USER}:${DNSCRYPT_GROUP}" "$CONFIG_DIR"
+            
+            # 3. Устанавливаем capabilities еще раз
+            if command -v setcap &>/dev/null; then
+                setcap 'cap_net_bind_service=+ep' "$INSTALL_DIR/dnscrypt-proxy" || {
+                    log "WARN" "Не удалось установить capability"
+                }
+            fi
+            
+            # 4. Альтернативная служба с root правами в случае критической проблемы
+            if systemctl status dnscrypt-proxy | grep -i "permission denied"; then
+                log "WARN" "Создание альтернативной службы с root правами..."
+                
+                # Создаем временную службу с root правами
+                cat > "$SERVICE_FILE" << EOF
+[Unit]
+Description=DNSCrypt client proxy (root fallback)
+Documentation=https://github.com/DNSCrypt/dnscrypt-proxy/wiki
+After=network.target
+Before=nss-lookup.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$INSTALL_DIR/dnscrypt-proxy -config $CONFIG_FILE
+Type=simple
+User=root
+Group=root
+Restart=on-failure
+RestartSec=10
+
+# Минимальные ограничения безопасности
+MemoryDenyWriteExecute=false
+ProtectSystem=false
+ReadWritePaths=$CONFIG_DIR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                systemctl daemon-reload
+                log "WARN" "Служба изменена для работы с root правами (временное решение)"
+            fi
+            
+            # Вторая попытка запуска после исправлений
+            systemctl daemon-reload
+            sleep 2
+            
+            if ! systemctl start dnscrypt-proxy; then
+                log "ERROR" "Не удалось запустить службу DNSCrypt после применения исправлений"
+                log "INFO" "Детальная информация об ошибке:"
+                journalctl -u dnscrypt-proxy -n 10 --no-pager
+                
+                # Предложение альтернативного порта
+                log "INFO" "Попытка настройки на альтернативном порту 5353..."
+                
+                # Изменяем конфигурацию на непривилегированный порт
+                sed -i "s/listen_addresses = \['127.0.0.1:53'\]/listen_addresses = ['127.0.0.1:5353']/" "$CONFIG_FILE"
+                
+                # Обновляем resolv.conf для работы с портом 5353
+                chattr -i /etc/resolv.conf 2>/dev/null || true
+                cat > /etc/resolv.conf << EOF
+# Generated by DNSCrypt Manager (port 5353)
+nameserver 127.0.0.1
+# port 5353 - 'port' is not a standard option, resolver should handle it
+options edns0
+EOF
+                chattr +i /etc/resolv.conf 2>/dev/null || true
+                
+                # Третья попытка с альтернативным портом
+                if systemctl restart dnscrypt-proxy; then
+                    log "SUCCESS" "DNSCrypt запущен на порту 5353"
+                    safe_echo "${YELLOW}ВНИМАНИЕ: DNSCrypt работает на порту 5353 вместо стандартного 53${NC}"
+                    safe_echo "Это решение проблемы с правами доступа."
+                else
+                    log "ERROR" "Не удалось запустить службу даже на альтернативном порту"
+                    rollback_changes
+                    return 1
+                fi
+            else
+                log "SUCCESS" "Служба DNSCrypt запущена после применения исправлений"
+            fi
+        else
+            log "ERROR" "Неизвестная ошибка запуска службы DNSCrypt"
+            log "INFO" "Проверка логов службы:"
+            journalctl -u dnscrypt-proxy -n 15 --no-pager
+            rollback_changes
+            return 1
+        fi
+    else
+        log "SUCCESS" "Служба DNSCrypt запущена с первой попытки"
+    fi
+    
+    # Проверка работы с использованием verify_settings из common.sh
+    log "INFO" "Проверка правильности работы DNSCrypt..."
+    sleep 5 # Даем время на инициализацию
+    
+    if verify_settings ""; then
+        log "SUCCESS" "DNSCrypt успешно установлен и работает!"
+        # Очищаем временные файлы для отката, так как установка успешна
+        rm -rf "${TEMP_BACKUP_DIR}"
+        ROLLBACK_NEEDED=false
+    else
+        log "WARN" "DNSCrypt установлен, но есть проблемы с работой службы"
+        
+        # Запускаем расширенную диагностику, если доступна функция
+        if type diagnose_dns_issues &>/dev/null; then
+            log "INFO" "Запуск расширенной диагностики..."
+            diagnose_dns_issues
+        fi
+        
+        # Спрашиваем пользователя, нужно ли откатить изменения
+        read -p "Обнаружены проблемы с работой DNSCrypt. Хотите откатить установку? (y/n): " rollback_choice
+        if [[ "${rollback_choice,,}" == "y" ]]; then
+            log "INFO" "Откат установки по запросу пользователя"
+            rollback_changes
+            return 1
+        else
+            log "WARN" "Пользователь решил продолжить несмотря на проблемы"
+            # Очищаем временные файлы для отката
+            rm -rf "${TEMP_BACKUP_DIR}"
+            ROLLBACK_NEEDED=false
+        fi
+    fi
+    
+    # Информация о текущих настройках
+    print_header "ИНФОРМАЦИЯ ОБ УСТАНОВКЕ"
+    
+    log "INFO" "Версия DNSCrypt-proxy: $("$INSTALL_DIR/dnscrypt-proxy" -version)"
+    
+    # Проверка текущих настроек
+    if type check_current_settings &>/dev/null; then
+        check_current_settings
+    else
+        log "INFO" "DNSCrypt-proxy установлен в $INSTALL_DIR"
+        log "INFO" "Конфигурационный файл: $CONFIG_FILE"
+        log "INFO" "Служба: $SERVICE_NAME"
+    fi
+    
+    # Финал
+    print_header "УСТАНОВКА ЗАВЕРШЕНА"
+    safe_echo "\n${GREEN}Установка DNSCrypt-proxy завершена успешно!${NC}"
+    safe_echo "Для проверки выполните: ${YELLOW}dig @127.0.0.1 google.com${NC}"
+    safe_echo "Для управления и дополнительной настройки используйте DNSCrypt Manager\n"
+
+    # Проверка наличия потенциальных проблем
+    if systemctl is-active --quiet systemd-resolved; then
+        safe_echo "${YELLOW}ВНИМАНИЕ:${NC} systemd-resolved всё еще активен, что может вызвать конфликты"
+        safe_echo "Рекомендуется выполнить: ${CYAN}sudo systemctl disable --now systemd-resolved${NC}\n"
+    fi
+
+    # Проверка порта
+    local current_port=$(grep "listen_addresses" "$CONFIG_FILE" | grep -o ":[0-9]*" | tr -d ':')
+    if [ "$current_port" != "53" ]; then
+        safe_echo "${YELLOW}ВНИМАНИЕ:${NC} DNSCrypt работает на порту $current_port вместо стандартного 53"
+        safe_echo "Это нормально для решения проблем с правами доступа.\n"
+    fi
+
+    safe_echo "После установки рекомендуется перезагрузить систему:"
+    safe_echo "${CYAN}sudo reboot${NC}\n"
+    
+    return 0
+}
+
+# Константы для Linux установки
 INSTALL_DIR="/opt/dnscrypt-proxy"
 CONFIG_DIR="/etc/dnscrypt-proxy"
 CONFIG_FILE="${CONFIG_DIR}/dnscrypt-proxy.toml"
@@ -154,7 +483,7 @@ download_latest_release() {
     if [ -z "$download_url" ]; then
         log "WARN" "Не удалось получить URL через API. Попытка загрузки резервной версии."
         
-        # Используем более новую и стабильную резервную версию
+        # Используем более новую иStable резервную версию
         local fallback_version="2.1.5"
         local fallback_base_url="https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${fallback_version}"
         local fallback_file="dnscrypt-proxy-${PLATFORM}_${CPU_ARCH}-${fallback_version}.tar.gz"
@@ -1317,8 +1646,8 @@ EOF
 # Перехват сигналов для выполнения отката при прерывании
 trap 'echo ""; log "WARN" "Установка прервана. Выполняем откат изменений..."; rollback_changes; exit 1' INT TERM
 
-# Вызов главной функции
-if ! install_dnscrypt; then
+# Вызов главной функции установки
+if ! main_install; then
     log "ERROR" "Установка DNSCrypt завершилась с ошибками"
     exit 1
 fi

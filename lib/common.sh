@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Версия библиотеки
-LIB_VERSION="1.1.0"
+LIB_VERSION="1.2.0"
 
 # Функция проверки поддержки цветов терминалом
 supports_color() {
@@ -45,6 +45,31 @@ init_colors() {
 
 # Инициализируем цвета при загрузке библиотеки
 init_colors
+
+# Функция определения платформы
+detect_platform() {
+    if [ -f /etc/openwrt_release ]; then
+        echo "openwrt"
+        return 0
+    elif [ -f /etc/debian_version ]; then
+        echo "debian"
+        return 0
+    elif [ -f /etc/redhat-release ]; then
+        echo "redhat"
+        return 0
+    elif [ -f /etc/arch-release ]; then
+        echo "arch"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Функция проверки, является ли система OpenWRT
+is_openwrt() {
+    [ -f /etc/openwrt_release ]
+}
 
 # Пути к основным файлам
 DNSCRYPT_CONFIG="/etc/dnscrypt-proxy/dnscrypt-proxy.toml"
@@ -754,7 +779,7 @@ list_available_servers() {
     safe_echo "${YELLOW}Для просмотра полного списка используйте интерактивный выбор серверов${NC}"
 }
 
-# Функция для вывода доступных релеев (обновлена под новый формат)
+# Функция для вывода доступных релеев (новая версия с учетом формата файлов)
 list_available_relays() {
     local relays_file=""
     
@@ -768,7 +793,7 @@ list_available_relays() {
         return 1
     fi
     
-    safe_echo "${BLUE}Доступные DNS-релеи (новый формат):${NC}"
+    safe_echo "${BLUE}Доступные DNS-релеи (новая версия):${NC}"
     echo
     
     local current_country=""
