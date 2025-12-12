@@ -3,7 +3,7 @@
 # Version: 1.2.0
 # Author: gopnikgame
 # Created: 2025-06-22
-# Last Modified: 2025-06-25
+# Last Modified: 2025-12-12
 
 # Подгрузка общих функций
 SCRIPT_DIR="/usr/local/dnscrypt-scripts"
@@ -33,6 +33,20 @@ source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
             if [[ $EUID -ne 0 ]]; then
                 log "ERROR" "${RED}Этот скрипт должен быть запущен с правами root${NC}"
                 exit 1
+            fi
+        }
+        
+        # Функция определения платформы
+        detect_platform() {
+            if [ -f /etc/openwrt_release ]; then
+                echo "openwrt"
+                return 0
+            elif [ -f /etc/debian_version ]; then
+                echo "debian"
+                return 0
+            else
+                echo "unknown"
+                return 1
             fi
         }
         
@@ -177,9 +191,24 @@ show_completion() {
     echo
     echo -e "${GREEN}✅ Система управления успешно установлена и готова к использованию!${NC}"
     echo
-    echo -e "Для запуска используйте одну из команд:"
-    echo -e "  ${YELLOW}sudo dnscrypt_manager${NC}"
-    echo -e "  ${YELLOW}sudo dnscrypt-manager${NC}"
+    
+    # Определяем платформу для корректного вывода команд
+    local platform=$(detect_platform 2>/dev/null || echo "unknown")
+    
+    if [ "$platform" = "openwrt" ]; then
+        echo -e "Для запуска используйте:"
+        echo -e "  ${YELLOW}dnscrypt_manager${NC}"
+        echo -e "  ${YELLOW}dnscrypt-manager${NC}"
+        echo -e "  или"
+        echo -e "  ${YELLOW}bash ${SCRIPT_DIR}/main.sh${NC}"
+    else
+        echo -e "Для запуска используйте одну из команд:"
+        echo -e "  ${YELLOW}sudo dnscrypt_manager${NC}"
+        echo -e "  ${YELLOW}sudo dnscrypt-manager${NC}"
+        echo -e "  или"
+        echo -e "  ${YELLOW}sudo bash ${SCRIPT_DIR}/main.sh${NC}"
+    fi
+    
     echo
     echo -e "Все модули будут автоматически загружены при первом запуске"
     echo
@@ -190,7 +219,19 @@ main() {
     print_header "DNSCRYPT MANAGER INSTALLER v$INSTALL_VERSION"
     
     check_root
-    check_dependencies wget systemctl curl grep
+    
+    # Определяем платформу для проверки зависимостей
+    local platform=$(detect_platform 2>/dev/null || echo "unknown")
+    
+    # Проверяем зависимости в зависимости от платформы
+    if [ "$platform" = "openwrt" ]; then
+        # На OpenWRT проверяем только базовые команды
+        check_dependencies wget grep
+    else
+        # На Linux проверяем включая systemctl
+        check_dependencies wget systemctl curl grep
+    fi
+    
     create_directories
     
     # Загрузка библиотек перед скриптом
