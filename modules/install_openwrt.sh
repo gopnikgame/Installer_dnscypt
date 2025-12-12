@@ -2,9 +2,10 @@
 
 ###############################################################################
 # DNSCrypt-Proxy Setup Script for OpenWRT with Rollback Support
-# Version: 1.2.1
+# Version: 1.3.0 - Added Passwall2/Xray compatibility
 # This script installs and configures dnscrypt-proxy2 with automatic rollback
 # Compatible with: OpenWRT 19.07+, 21.02+ (recommended)
+# Supports integration with Passwall2/Xray
 # 
 # Usage: 
 #   wget -O /tmp/install_openwrt.sh https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/modules/install_openwrt.sh
@@ -19,21 +20,28 @@ if [ -t 1 ] && [ -n "${TERM}" ] && [ "${TERM}" != "dumb" ]; then
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
     BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
     NC='\033[0m'
 else
     RED=''
     GREEN=''
     YELLOW=''
     BLUE=''
+    CYAN=''
     NC=''
 fi
 
 # Script version
-SCRIPT_VERSION="1.2.1"
+SCRIPT_VERSION="1.3.0"
 
 # Backup directory
 BACKUP_DIR="/tmp/dnscrypt_backup_$(date +%s)"
 ROLLBACK_NEEDED=0
+
+# Detection flags
+HAS_PASSWALL2=0
+HAS_XRAY=0
+PASSWALL2_DNS_MODE=""
 
 # Banner
 print_banner() {
@@ -41,6 +49,7 @@ print_banner() {
     printf "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}\n"
     printf "${BLUE}║${NC}       DNSCrypt-Proxy Installer for OpenWRT v${SCRIPT_VERSION}      ${BLUE}║${NC}\n"
     printf "${BLUE}║${NC}              Automatic Setup with Rollback                 ${BLUE}║${NC}\n"
+    printf "${BLUE}║${NC}          🆕 Passwall2/Xray Compatible Mode 🆕              ${BLUE}║${NC}\n"
     printf "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}\n"
     printf "\n"
 }
@@ -60,6 +69,10 @@ log_error() {
 
 log_step() {
     printf "\n${BLUE}➜${NC} %s\n" "$1"
+}
+
+log_detect() {
+    printf "${CYAN}[DETECT]${NC} %s\n" "$1"
 }
 
 # Create backup directory
@@ -127,6 +140,11 @@ rollback_changes() {
     /etc/init.d/firewall restart 2>/dev/null || true
     /etc/init.d/sysntpd restart 2>/dev/null || true
     
+    # Restart Passwall2 if it was running
+    if [ "$HAS_PASSWALL2" -eq 1 ]; then
+        /etc/init.d/passwall2 restart 2>/dev/null || true
+    fi
+    
     # Remove dnscrypt-proxy package if it was just installed
     if [ -f "$BACKUP_DIR/package_installed.flag" ]; then
         log_info "Removing dnscrypt-proxy2 package"
@@ -147,6 +165,91 @@ check_root() {
         log_error "This script must be run as root"
         printf "\n${YELLOW}Please run as root or use: su${NC}\n\n"
         exit 1
+    fi
+}
+
+# Detect Passwall2 and Xray
+detect_proxy_systems() {
+    log_step "Detecting existing proxy systems..."
+    
+    # Check for Passwall2
+    if [ -f "/etc/init.d/passwall2" ] || opkg list-installed | grep -q "luci-app-passwall2"; then
+        HAS_PASSWALL2=1
+        log_detect "Found Passwall2 installation"
+        
+        # Check Passwall2 status
+        if /etc/init.d/passwall2 status 2>/dev/null | grep -q "running"; then
+            log_detect "Passwall2 is currently running"
+        fi
+        
+        # Detect DNS mode
+        if [ -f "/tmp/etc/passwall2/acl/default/global.json" ]; then
+            log_detect "Found Passwall2 Xray configuration"
+            PASSWALL2_DNS_MODE="xray"
+        fi
+    fi
+    
+    # Check for Xray
+    if pgrep -f "xray" >/dev/null 2>&1; then
+        HAS_XRAY=1
+        log_detect "Found Xray process running"
+    fi
+    
+    # Show detection summary
+    if [ "$HAS_PASSWALL2" -eq 1 ] || [ "$HAS_XRAY" -eq 1 ]; then
+        printf "\n${CYAN}╔════════════════════════════════════════════════════════════╗${NC}\n"
+        printf "${CYAN}║${NC}              Proxy System Detection Summary                ${CYAN}║${NC}\n"
+        printf "${CYAN}╠════════════════════════════════════════════════════════════╣${NC}\n"
+        
+        if [ "$HAS_PASSWALL2" -eq 1 ]; then
+            printf "${CYAN}║${NC} Passwall2: ${GREEN}DETECTED${NC}                                        ${CYAN}║${NC}\n"
+        else
+            printf "${CYAN}║${NC} Passwall2: Not found                                       ${CYAN}║${NC}\n"
+        fi
+        
+        if [ "$HAS_XRAY" -eq 1 ]; then
+            printf "${CYAN}║${NC} Xray:      ${GREEN}RUNNING${NC}                                         ${CYAN}║${NC}\n"
+        else
+            printf "${CYAN}║${NC} Xray:      Not running                                     ${CYAN}║${NC}\n"
+        fi
+        
+        printf "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}\n\n"
+        
+        log_warn "Compatible mode will be used for integration"
+        printf "\n${YELLOW}DNSCrypt will integrate with existing proxy system${NC}\n"
+        printf "${YELLOW}Configuration will be adapted automatically${NC}\n\n"
+        
+        # Ask user for integration mode
+        printf "${CYAN}Choose integration mode:${NC}\n"
+        printf "  ${GREEN}1${NC}) DNSCrypt as upstream DNS for Passwall2 (Recommended)\n"
+        printf "  ${GREEN}2${NC}) Disable Passwall2 DNS, use only DNSCrypt\n"
+        printf "  ${GREEN}3${NC}) Cancel installation\n"
+        printf "\nYour choice [1]: "
+        read -r integration_mode
+        integration_mode=${integration_mode:-1}
+        
+        case "$integration_mode" in
+            1)
+                log_info "Selected: DNSCrypt as upstream for Passwall2"
+                ;;
+            2)
+                log_info "Selected: Disable Passwall2 DNS"
+                ;;
+            3)
+                log_info "Installation cancelled by user"
+                exit 0
+                ;;
+            *)
+                log_warn "Invalid choice, using default (1)"
+                integration_mode=1
+                ;;
+        esac
+        
+        # Save integration mode
+        echo "$integration_mode" > "$BACKUP_DIR/integration_mode.txt"
+    else
+        log_info "No proxy systems detected, proceeding with standard installation"
+        echo "0" > "$BACKUP_DIR/integration_mode.txt"
     fi
 }
 
@@ -221,7 +324,7 @@ install_dnscrypt() {
     }
     
     # Check if already installed
-    if opkg list-installed | grep -q "dnscrypt-proxy2"; then
+    if opkg list-installed | grep -q "^dnscrypt-proxy2 "; then
         log_warn "dnscrypt-proxy2 is already installed"
         printf "Reinstall? [y/N]: "
         read -r response
@@ -243,38 +346,37 @@ install_dnscrypt() {
     fi
 }
 
-# Configure DNSCrypt
+# Configure DNSCrypt (adapted for Passwall2)
 configure_dnscrypt() {
     log_step "Configuring DNSCrypt-Proxy..."
     
     backup_file "/etc/dnscrypt-proxy2/dnscrypt-proxy.toml"
     
-    cat > /etc/dnscrypt-proxy2/dnscrypt-proxy.toml << 'EOF'
+    # Read integration mode
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    
+    # Choose listen address based on integration
+    local listen_addr="127.0.0.53:53"
+    if [ "$integration_mode" = "1" ] && [ "$HAS_PASSWALL2" -eq 1 ]; then
+        # Use different port to avoid conflict with Xray
+        listen_addr="127.0.0.54:53"
+        log_info "Using port 127.0.0.54 for Passwall2 integration"
+    fi
+    
+    cat > /etc/dnscrypt-proxy2/dnscrypt-proxy.toml << EOF
 # DNSCrypt-Proxy Configuration for OpenWRT
 # Optimized for router environment
 
-# DNS Servers
-server_names = ['cloudflare', 'google', 'quad9-dnscrypt-ip4-filter-pri']
-
-# Load balancing strategy
-# 'p2' - pick random from 2 fastest (recommended)
-# 'ph' - pick random from fastest half
-# 'first' - always use fastest
-lb_strategy = 'p2'
-
-# Listen address - must be different from dnsmasq
-listen_addresses = ['127.0.0.53:53']
-
-# Connection limits
+server_names = ['dnscry.pt-moscow-ipv4', 'quad9-dnscrypt-ip4-filter-pri', 'cloudflare', 'google']
+lb_strategy = 'ph'
+listen_addresses = ['$listen_addr']
 max_clients = 250
 
-# Protocol support
 ipv4_servers = true
 ipv6_servers = false
 dnscrypt_servers = true
 doh_servers = true
 
-# Security requirements
 require_dnssec = true
 require_nolog = true
 require_nofilter = false
@@ -286,21 +388,16 @@ http3 = false
 timeout = 2500
 keepalive = 30
 
-# Bootstrap resolvers (by IP to avoid DNS loop)
 bootstrap_resolvers = ['9.9.9.11:53', '8.8.8.8:53']
 ignore_system_dns = true
-
-# Network probe settings
 netprobe_timeout = 2500
 netprobe_address = '9.9.9.9:53'
 
-# Block settings
 block_ipv6 = true
 block_unqualified = true
 block_undelegated = true
 reject_ttl = 10
 
-# Caching (important for router performance)
 cache = true
 cache_size = 4096
 cache_min_ttl = 2400
@@ -308,7 +405,6 @@ cache_max_ttl = 86400
 cache_neg_min_ttl = 60
 cache_neg_max_ttl = 600
 
-# Sources for server lists
 [sources]
 
 [sources.public-resolvers]
@@ -332,13 +428,18 @@ refresh_delay = 73
 prefix = ''
 
 [sources.quad9-resolvers]
-urls = ['https://quad9.net/dnscrypt/quad9-resolvers.md',
-        'https://raw.githubusercontent.com/Quad9DNS/dnscrypt-settings/main/dnscrypt/quad9-resolvers.md']
+urls = ['https://quad9.net/dnscrypt/quad9-resolvers.md', 'https://raw.githubusercontent.com/Quad9DNS/dnscrypt-settings/main/dnscrypt/quad9-resolvers.md']
 minisign_key = 'RWQBphd2+f6eiAqBsvDZEBXBGHQBJfeG6G+wJPPKxCZMoEQYpmoysKUN'
 cache_file = 'quad9-resolvers.md'
 prefix = 'quad9-'
 
-# Fragmented UDP packets workaround
+[sources.dnscry-pt-resolvers]
+urls = ["https://www.dnscry.pt/resolvers.md"]
+minisign_key = "RWQM31Nwkqh01x88SvrBL8djp1NH56Rb4mKLHz16K7qsXgEomnDv6ziQ"
+cache_file = "dnscry.pt-resolvers.md"
+refresh_delay = 73
+prefix = "dnscry.pt-"
+
 [broken_implementations]
 fragments_blocked = [
   'cisco',
@@ -355,33 +456,31 @@ fragments_blocked = [
 ]
 EOF
     
-    log_info "DNSCrypt configuration created"
+    log_info "DNSCrypt configuration created (listen: $listen_addr)"
 }
 
-# Configure dnsmasq
+# Configure dnsmasq (adapted for Passwall2)
 configure_dnsmasq() {
     log_step "Configuring dnsmasq..."
     
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    
     backup_uci_config "dhcp"
     
-    # Remove any existing dnscrypt server entries
-    while uci -q delete dhcp.@dnsmasq[0].server 2>/dev/null; do :; done
-    
-    # Add DNS forwarding to dnscrypt-proxy
-    uci add_list dhcp.@dnsmasq[0].server='127.0.0.53'
-    
-    # Prevent DNS leaks and disable dnsmasq cache (dnscrypt has its own)
-    uci set dhcp.@dnsmasq[0].noresolv='1'
-    uci set dhcp.@dnsmasq[0].localuse='1'
-    uci set dhcp.@dnsmasq[0].cachesize='0'
-    
-    # Optional: Enable query logging (commented out by default)
-    # uci set dhcp.@dnsmasq[0].logqueries='1'
-    # uci set dhcp.@dnsmasq[0].logfacility='/tmp/dnsmasq_queries.log'
-    
-    uci commit dhcp
-    
-    log_info "dnsmasq configured successfully"
+    if [ "$integration_mode" = "1" ] && [ "$HAS_PASSWALL2" -eq 1 ]; then
+        # Integration mode: Don't change dnsmasq, Passwall2 will use DNSCrypt
+        log_info "Skipping dnsmasq configuration (Passwall2 integration mode)"
+        log_info "You'll need to manually configure Passwall2 to use 127.0.0.54"
+    else
+        # Standard mode
+        while uci -q delete dhcp.@dnsmasq[0].server 2>/dev/null; do :; done
+        uci add_list dhcp.@dnsmasq[0].server='127.0.0.53'
+        uci set dhcp.@dnsmasq[0].noresolv='1'
+        uci set dhcp.@dnsmasq[0].localuse='1'
+        uci set dhcp.@dnsmasq[0].cachesize='0'
+        uci commit dhcp
+        log_info "dnsmasq configured successfully"
+    fi
 }
 
 # Configure NTP with IP addresses
@@ -390,76 +489,78 @@ configure_ntp() {
     
     backup_uci_config "system"
     
-    # Remove existing NTP servers
     while uci -q delete system.ntp.server 2>/dev/null; do :; done
     
-    # Add Google and Cloudflare NTP servers by IP
-    uci add_list system.ntp.server='216.239.35.0'    # time1.google.com
-    uci add_list system.ntp.server='216.239.35.4'    # time2.google.com
-    uci add_list system.ntp.server='216.239.35.8'    # time3.google.com
-    uci add_list system.ntp.server='162.159.200.123' # time.cloudflare.com
+    uci add_list system.ntp.server='216.239.35.0'
+    uci add_list system.ntp.server='216.239.35.4'
+    uci add_list system.ntp.server='216.239.35.8'
+    uci add_list system.ntp.server='162.159.200.123'
     
     uci commit system
     
     log_info "NTP servers configured"
 }
 
-# Disable ISP DNS
+# Disable ISP DNS (adapted for Passwall2)
 configure_network() {
     log_step "Disabling ISP DNS (prevent DNS leaks)..."
     
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    
     backup_uci_config "network"
     
-    # Disable peer DNS for wan interface
     uci set network.wan.peerdns='0'
     
-    # Also for wan6 if it exists
     if uci -q get network.wan6 >/dev/null 2>&1; then
         uci set network.wan6.peerdns='0'
     fi
     
-    # Set custom DNS (will use our dnscrypt-proxy)
-    uci -q delete network.wan.dns 2>/dev/null || true
-    uci add_list network.wan.dns='127.0.0.1'
+    if [ "$integration_mode" != "1" ] || [ "$HAS_PASSWALL2" -eq 0 ]; then
+        uci -q delete network.wan.dns 2>/dev/null || true
+        uci add_list network.wan.dns='127.0.0.1'
+    fi
     
     uci commit network
     
     log_info "ISP DNS disabled"
 }
 
-# Configure firewall rules
+# Configure firewall rules (adapted for Passwall2)
 configure_firewall() {
     log_step "Configuring firewall rules..."
     
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    
     backup_uci_config "firewall"
     
-    # Remove existing rules if they exist
     uci -q delete firewall.dns_redirect 2>/dev/null || true
     uci -q delete firewall.dot_block 2>/dev/null || true
-    uci -q delete firewall.dns_alt_redirect 2>/dev/null || true
     
-    # Redirect DNS queries to dnscrypt-proxy
-    uci set firewall.dns_redirect=redirect
-    uci set firewall.dns_redirect.name='Divert-DNS-to-DNSCrypt'
-    uci set firewall.dns_redirect.src='lan'
-    uci set firewall.dns_redirect.dest='lan'
-    uci set firewall.dns_redirect.src_dport='53'
-    uci set firewall.dns_redirect.dest_port='53'
-    uci set firewall.dns_redirect.proto='tcp udp'
-    uci set firewall.dns_redirect.target='DNAT'
-    
-    # Block DNS-over-TLS (port 853) to prevent bypass
-    uci set firewall.dot_block=rule
-    uci set firewall.dot_block.name='Block-DoT-Bypass'
-    uci set firewall.dot_block.src='lan'
-    uci set firewall.dot_block.dest='wan'
-    uci set firewall.dot_block.dest_port='853'
-    uci set firewall.dot_block.proto='tcp'
-    uci set firewall.dot_block.target='REJECT'
+    if [ "$integration_mode" != "1" ] || [ "$HAS_PASSWALL2" -eq 0 ]; then
+        # Standard firewall rules
+        uci set firewall.dns_redirect=redirect
+        uci set firewall.dns_redirect.name='Divert-DNS-to-DNSCrypt'
+        uci set firewall.dns_redirect.src='lan'
+        uci set firewall.dns_redirect.dest='lan'
+        uci set firewall.dns_redirect.src_dport='53'
+        uci set firewall.dns_redirect.dest_port='53'
+        uci set firewall.dns_redirect.proto='tcp udp'
+        uci set firewall.dns_redirect.target='DNAT'
+        
+        uci set firewall.dot_block=rule
+        uci set firewall.dot_block.name='Block-DoT-Bypass'
+        uci set firewall.dot_block.src='lan'
+        uci set firewall.dot_block.dest='wan'
+        uci set firewall.dot_block.dest_port='853'
+        uci set firewall.dot_block.proto='tcp'
+        uci set firewall.dot_block.target='REJECT'
+        
+        log_info "Firewall rules configured"
+    else
+        log_info "Skipping firewall configuration (Passwall2 manages firewall)"
+    fi
     
     uci commit firewall
-    
-    log_info "Firewall rules configured"
 }
 
 # Add to sysupgrade backup
@@ -478,11 +579,12 @@ add_to_backup() {
     fi
 }
 
-# Start services
+# Start services (adapted for Passwall2)
 start_services() {
     log_step "Starting services..."
     
-    # Enable and start dnscrypt-proxy
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    
     /etc/init.d/dnscrypt-proxy enable
     if /etc/init.d/dnscrypt-proxy start; then
         log_info "DNSCrypt-Proxy started"
@@ -493,63 +595,75 @@ start_services() {
     
     sleep 3
     
-    # Restart dnsmasq
-    if /etc/init.d/dnsmasq restart; then
-        log_info "dnsmasq restarted"
+    if [ "$integration_mode" != "1" ] || [ "$HAS_PASSWALL2" -eq 0 ]; then
+        if /etc/init.d/dnsmasq restart; then
+            log_info "dnsmasq restarted"
+        else
+            log_error "Failed to restart dnsmasq"
+            return 1
+        fi
+        
+        if /etc/init.d/firewall restart; then
+            log_info "Firewall restarted"
+        else
+            log_warn "Failed to restart firewall (non-critical)"
+        fi
     else
-        log_error "Failed to restart dnsmasq"
-        return 1
+        log_info "Skipping dnsmasq/firewall restart (Passwall2 integration)"
     fi
     
-    # Restart firewall
-    if /etc/init.d/firewall restart; then
-        log_info "Firewall restarted"
-    else
-        log_warn "Failed to restart firewall (non-critical)"
-    fi
-    
-    # Restart NTP
     /etc/init.d/sysntpd restart 2>/dev/null || log_warn "NTP restart skipped"
+    
+    if [ "$HAS_PASSWALL2" -eq 1 ]; then
+        log_info "Restarting Passwall2..."
+        /etc/init.d/passwall2 restart 2>/dev/null || log_warn "Passwall2 restart failed"
+    fi
     
     log_info "All services started successfully"
 }
 
-# Verify configuration
+# Verify configuration (adapted for Passwall2)
 verify_configuration() {
     log_step "Verifying installation..."
     
-    # Check if dnscrypt-proxy is running
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    local dns_addr="127.0.0.53"
+    
+    if [ "$integration_mode" = "1" ] && [ "$HAS_PASSWALL2" -eq 1 ]; then
+        dns_addr="127.0.0.54"
+    fi
+    
     if ! pgrep -f dnscrypt-proxy >/dev/null; then
         log_error "dnscrypt-proxy process is not running"
         return 1
     fi
     log_info "✓ DNSCrypt-Proxy process is running"
     
-    # Check if listening on correct port
-    if netstat -ln 2>/dev/null | grep -q "127.0.0.53:53"; then
-        log_info "✓ Listening on 127.0.0.53:53"
+    if netstat -ln 2>/dev/null | grep -q "$dns_addr:53"; then
+        log_info "✓ Listening on $dns_addr:53"
     else
         log_warn "May not be listening on expected port"
     fi
     
-    # Test DNS resolution
     log_info "Testing DNS resolution..."
-    if nslookup google.com 127.0.0.53 >/dev/null 2>&1; then
+    if nslookup google.com $dns_addr >/dev/null 2>&1; then
         log_info "✓ DNS resolution test PASSED"
     else
         log_warn "DNS resolution test failed (may need time to initialize)"
     fi
     
-    # Check dnsmasq config
-    if uci get dhcp.@dnsmasq[0].server 2>/dev/null | grep -q "127.0.0.53"; then
-        log_info "✓ dnsmasq configured correctly"
-    fi
-    
     log_info "Verification completed"
 }
 
-# Show status and recommendations
+# Show status and recommendations (adapted for Passwall2)
 show_status() {
+    local integration_mode=$(cat "$BACKUP_DIR/integration_mode.txt" 2>/dev/null || echo "0")
+    local dns_addr="127.0.0.53"
+    
+    if [ "$integration_mode" = "1" ] && [ "$HAS_PASSWALL2" -eq 1 ]; then
+        dns_addr="127.0.0.54"
+    fi
+    
     printf "\n"
     printf "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}\n"
     printf "${GREEN}║${NC}          DNSCrypt Setup Completed Successfully!            ${GREEN}║${NC}\n"
@@ -557,25 +671,50 @@ show_status() {
     printf "\n"
     
     printf "${BLUE}📋 Configuration Summary:${NC}\n"
-    printf "  ├─ DNSCrypt listening: ${GREEN}127.0.0.53:53${NC}\n"
-    printf "  ├─ Dnsmasq forwarding: ${GREEN}127.0.0.53${NC}\n"
+    printf "  ├─ DNSCrypt listening: ${GREEN}$dns_addr:53${NC}\n"
+    
+    if [ "$integration_mode" = "1" ] && [ "$HAS_PASSWALL2" -eq 1 ]; then
+        printf "  ├─ Integration: ${CYAN}Passwall2 Mode${NC}\n"
+        printf "  ├─ Passwall2: ${GREEN}Active${NC}\n"
+        printf "  ├─ dnsmasq: ${YELLOW}Managed by Passwall2${NC}\n"
+    else
+        printf "  ├─ Dnsmasq forwarding: ${GREEN}$dns_addr${NC}\n"
+        printf "  ├─ Firewall: ${GREEN}Active (DNS redirect + DoT block)${NC}\n"
+    fi
+    
     printf "  ├─ ISP DNS: ${YELLOW}Disabled${NC}\n"
     printf "  ├─ DNS Cache: ${GREEN}DNSCrypt (4096 entries)${NC}\n"
-    printf "  ├─ Firewall: ${GREEN}Active (DNS redirect + DoT block)${NC}\n"
     printf "  └─ Backup saved: ${BLUE}%s${NC}\n" "$BACKUP_DIR"
     printf "\n"
     
     printf "${BLUE}🔧 Useful Commands:${NC}\n"
     printf "  Check status:    ${YELLOW}/etc/init.d/dnscrypt-proxy status${NC}\n"
     printf "  View logs:       ${YELLOW}logread | grep dnscrypt${NC}\n"
-    printf "  Test DNS:        ${YELLOW}nslookup google.com 127.0.0.53${NC}\n"
-    printf "  Test from LAN:   ${YELLOW}nslookup google.com$(NC}\n"
+    printf "  Test DNS:        ${YELLOW}nslookup google.com $dns_addr${NC}\n"
     printf "\n"
+    
+    if [ "$integration_mode" = "1" ] && [ "$HAS_PASSWALL2" -eq 1 ]; then
+        printf "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}\n"
+        printf "${CYAN}║${NC}            Passwall2 Integration Instructions              ${CYAN}║${NC}\n"
+        printf "${CYAN}╠════════════════════════════════════════════════════════════╣${NC}\n"
+        printf "${CYAN}║${NC} 1. Open Passwall2 web interface                           ${CYAN}║${NC}\n"
+        printf "${CYAN}║${NC} 2. Go to: Basic Settings → DNS Settings                   ${CYAN}║${NC}\n"
+        printf "${CYAN}║${NC} 3. Set Remote DNS to: ${GREEN}127.0.0.54${NC}                            ${CYAN}║${NC}\n"
+        printf "${CYAN}║${NC} 4. Set Direct DNS to: ${GREEN}127.0.0.54${NC}                            ${CYAN}║${NC}\n"
+        printf "${CYAN}║${NC} 5. Disable DoH in Xray (use DNSCrypt instead)             ${CYAN}║${NC}\n"
+        printf "${CYAN}║${NC} 6. Save and restart Passwall2                              ${CYAN}║${NC}\n"
+        printf "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}\n"
+        printf "\n"
+        printf "${YELLOW}Alternative: Edit Xray config directly${NC}\n"
+        printf "  File: ${BLUE}/tmp/etc/passwall2/acl/default/global.json${NC}\n"
+        printf "  Change DNS servers to: ${GREEN}\"127.0.0.54\"${NC}\n"
+        printf "\n"
+    fi
     
     printf "${BLUE}🌐 Next Steps:${NC}\n"
     printf "  1. Test DNS leak: ${YELLOW}https://dnsleaktest.com${NC}\n"
     printf "  2. Verify DNSSEC: ${YELLOW}https://dnssec.vs.uni-due.de${NC}\n"
-    printf "  3. Check your IP is hidden from DNS provider\n"
+    printf "  3. Check DNS resolution speed\n"
     printf "\n"
     
     printf "${BLUE}⚠️  Manual Rollback (if needed):${NC}\n"
@@ -598,6 +737,7 @@ main() {
     check_openwrt_version
     check_space
     create_backup_dir
+    detect_proxy_systems
     check_connectivity
     
     install_dnscrypt
