@@ -122,7 +122,7 @@ update_libraries() {
     local lib_dir="${SCRIPT_DIR}/lib"
     mkdir -p "$lib_dir"
     
-    local libs=("common.sh" "anonymized_dns.sh" "diagnostic.sh")
+    local libs=("common.sh" "system.sh" "anonymized_dns.sh" "diagnostic.sh")
     local updated_libs=0
     local errors_libs=0
     local critical_error=false

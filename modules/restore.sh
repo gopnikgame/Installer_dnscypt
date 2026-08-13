@@ -64,7 +64,7 @@ create_emergency_backup() {
     "created": "${emergency_timestamp}",
     "version": "${RESTORE_VERSION}",
     "system_info": "$(uname -a)",
-    "dnscrypt_status": "$(systemctl is-active dnscrypt-proxy)",
+    "dnscrypt_status": "$(service_is_active dnscrypt-proxy && echo active || echo inactive)",
     "files": {
         "dnscrypt_config": "$([ -f "$DNSCRYPT_CONFIG" ] && echo "yes" || echo "no")",
         "resolv_conf": "$([ -f "$RESOLV_CONF" ] && echo "yes" || echo "no")",
@@ -304,8 +304,8 @@ perform_restore() {
     
     # Остановка службы
     log "INFO" "Остановка службы DNSCrypt..."
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
-        systemctl stop "$DNSCRYPT_SERVICE"
+    if service_is_active "$DNSCRYPT_SERVICE"; then
+        service_stop "$DNSCRYPT_SERVICE"
         sleep 2
     fi
     
@@ -414,7 +414,7 @@ restore_service_file() {
         log "INFO" "Восстановление файла службы..."
         
         if cp "${backup_path}/dnscrypt-proxy.service" "/etc/systemd/system/"; then
-            systemctl daemon-reload
+            service_reload_manager
             log "SUCCESS" "Файл службы восстановлен"
             restored_ref+=("service file")
             return 0
@@ -470,7 +470,7 @@ start_and_verify_service() {
     fi
     
     # Запуск службы
-    if ! systemctl start "$DNSCRYPT_SERVICE"; then
+    if ! service_start "$DNSCRYPT_SERVICE"; then
         log "ERROR" "Ошибка запуска службы DNSCrypt"
         
         # Диагностика проблемы
@@ -484,7 +484,7 @@ start_and_verify_service() {
         fi
         
         # Показываем статус службы
-        systemctl status "$DNSCRYPT_SERVICE" --no-pager -l
+        service_status "$DNSCRYPT_SERVICE"
         
         return 1
     fi
@@ -494,7 +494,7 @@ start_and_verify_service() {
     sleep 3
     
     # Проверка работоспособности
-    if ! systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if ! service_is_active "$DNSCRYPT_SERVICE"; then
         log "ERROR" "Служба не запущена после восстановления"
         return 1
     fi
@@ -534,7 +534,7 @@ generate_restore_report() {
     fi
     
     safe_echo "\n${BLUE}Текущий статус системы:${NC}"
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if service_is_active "$DNSCRYPT_SERVICE"; then
         safe_echo "  Служба DNSCrypt: ${GREEN}активна${NC}"
         
         # Показываем текущие настройки
@@ -672,7 +672,7 @@ cleanup_old_backups() {
 # Основная функция - точка входа
 main() {
     # Проверка зависимостей
-    check_dependencies dig lsof chattr systemctl
+    check_dependencies dig lsof chattr
     
     # Проверка root-прав
     check_root

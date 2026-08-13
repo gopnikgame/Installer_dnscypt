@@ -11,7 +11,8 @@ SCRIPT_DIR="/usr/local/dnscrypt-scripts"
 source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
     # Если библиотека не найдена, создаем временную директорию и загружаем
     mkdir -p "${SCRIPT_DIR}/lib"
-    wget -q -O "${SCRIPT_DIR}/lib/common.sh" "https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/common.sh" 
+    wget -q -O "${SCRIPT_DIR}/lib/system.sh" "https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/system.sh"
+    wget -q -O "${SCRIPT_DIR}/lib/common.sh" "https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/common.sh"
     source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
         # Если не удалось загрузить, создаем минимальные необходимые функции
         RED='\033[0;31m'
@@ -91,7 +92,7 @@ print_step() {
 download_libraries() {
     print_step "Загрузка библиотек..."
     
-    local libraries="common.sh anonymized_dns.sh diagnostic.sh"
+    local libraries="system.sh common.sh anonymized_dns.sh diagnostic.sh"
     local success=true
     
     for lib in $libraries; do
@@ -228,10 +229,9 @@ main() {
         # На OpenWRT проверяем только базовые команды
         check_dependencies wget grep
     else
-        # На Linux проверяем включая systemctl
+        # На Linux менеджер служб определяется после загрузки common.sh.
         check_dependencies wget grep
         # curl опционален
-        command -v systemctl >/dev/null 2>&1 || log "WARN" "systemctl не найден"
         command -v curl >/dev/null 2>&1 || log "WARN" "curl не найден"
     fi
     

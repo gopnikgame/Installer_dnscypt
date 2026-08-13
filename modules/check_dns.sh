@@ -38,7 +38,7 @@ check_current_dns() {
         
         # Проверка активного сервера из логов
         safe_echo "\n${YELLOW}Информация о текущем сервере:${NC}"
-        local active_server=$(journalctl -u dnscrypt-proxy -n 50 | grep "Server with lowest initial latency" | tail -n 1)
+        local active_server=$(service_logs dnscrypt-proxy 50 | grep "Server with lowest initial latency" | tail -n 1)
         if [ -n "$active_server" ]; then
             echo "  $active_server"
         fi
@@ -210,7 +210,7 @@ EOF
         fi
         
         # Отображаем информацию об активном сервере из логов DNSCrypt
-        local active_server=$(journalctl -u dnscrypt-proxy -n 20 | grep -E "Server with lowest|Using server" | tail -n 1)
+        local active_server=$(service_logs dnscrypt-proxy 20 | grep -E "Server with lowest|Using server" | tail -n 1)
         if [ -n "$active_server" ]; then
             safe_echo "  ${GREEN}Активный DNSCrypt сервер: $active_server${NC}"
         fi
@@ -221,7 +221,7 @@ EOF
         
         # Проверяем, запущена ли служба
         if ! check_service_status "dnscrypt-proxy"; then
-            systemctl start dnscrypt-proxy
+            service_start dnscrypt-proxy
         fi
         
         # Проверяем порты
@@ -230,7 +230,7 @@ EOF
         
         # Проверяем логи на ошибки
         safe_echo "${YELLOW}Последние ошибки в логах DNSCrypt:${NC}"
-        journalctl -u dnscrypt-proxy -n 20 --grep="error|failed|warning" --no-pager
+        service_logs dnscrypt-proxy 20 | grep -Ei "error|failed|warning"
         
         return 1
     fi
@@ -297,7 +297,7 @@ get_dns_protocol_info() {
     
     # Анализ логов для определения активного сервера и протокола
     safe_echo "\n${YELLOW}Анализ активных соединений по логам:${NC}"
-    local dns_log=$(journalctl -u dnscrypt-proxy -n 100 --no-pager 2>/dev/null)
+    local dns_log=$(service_logs dnscrypt-proxy 100 2>/dev/null)
     
     # Поиск информации о протоколе
     local protocol_line=$(echo "$dns_log" | grep -E "Connected to ([^(]*).*\(([^)]*)\)" | tail -n 1)

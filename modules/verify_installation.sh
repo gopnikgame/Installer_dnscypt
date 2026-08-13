@@ -142,7 +142,7 @@ verify_installation() {
     
     # Проверка службы автозапуска
     echo -n "Автозапуск службы: "
-    if systemctl is-enabled --quiet dnscrypt-proxy; then
+    if service_is_active dnscrypt-proxy; then
         safe_echo "${GREEN}Включен${NC}"
     else
         safe_echo "${YELLOW}Отключен${NC}"
@@ -191,7 +191,7 @@ verify_installation() {
         echo "5. ${CYAN}Восстановление из резервной копии${NC} - пункт 9 главного меню"
         
         safe_echo "\n${YELLOW}Для подробной диагностики выполните:${NC}"
-        echo "sudo journalctl -u dnscrypt-proxy -n 50"
+        echo "Используйте пункт диагностики менеджера для просмотра журналов ($INIT_SYSTEM)."
         
         return 1
     fi

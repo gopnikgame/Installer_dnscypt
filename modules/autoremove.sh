@@ -29,8 +29,8 @@ uninstall_dnscrypt() {
     
     # 1. Остановка и отключение службы DNSCrypt
     log "INFO" "Остановка и отключение службы DNSCrypt..."
-    systemctl stop $DNSCRYPT_SERVICE 2>/dev/null
-    systemctl disable $DNSCRYPT_SERVICE 2>/dev/null
+    service_stop "$DNSCRYPT_SERVICE" 2>/dev/null
+    service_disable "$DNSCRYPT_SERVICE" 2>/dev/null
     log "SUCCESS" "Служба DNSCrypt остановлена и отключена"
     
     # 2. Восстановление оригинального resolv.conf из бэкапа
@@ -62,7 +62,7 @@ EOF
     fi
     
     # 3. Включение systemd-resolved, если он был отключен
-    if systemctl is-enabled systemd-resolved 2>/dev/null | grep -q "disabled"; then
+    if [ "$INIT_SYSTEM" = systemd ] && systemctl is-enabled systemd-resolved 2>/dev/null | grep -q "disabled"; then
         log "INFO" "Включение systemd-resolved..."
         systemctl enable systemd-resolved
         systemctl start systemd-resolved
@@ -96,8 +96,7 @@ EOF
     rm -rf /etc/dnscrypt-proxy 2>/dev/null
     
     # Удаляем файл службы
-    rm -f /etc/systemd/system/dnscrypt-proxy.service 2>/dev/null
-    systemctl daemon-reload
+    remove_dnscrypt_service "$DNSCRYPT_SERVICE"
     
     # 6. Удаление бэкапов, логов и прочих файлов
     log "INFO" "Удаление бэкапов и логов..."
@@ -127,13 +126,13 @@ EOF
     log "INFO" "Очистка системного DNS кэша..."
     
     # Очистка кэша systemd-resolved (если используется)
-    if systemctl is-active --quiet systemd-resolved; then
+    if [ "$INIT_SYSTEM" = systemd ] && service_is_active systemd-resolved; then
         systemd-resolve --flush-caches 2>/dev/null
     fi
     
     # Очистка кэша nscd (если установлен)
-    if command -v nscd &>/dev/null && systemctl is-active --quiet nscd; then
-        systemctl restart nscd 2>/dev/null
+    if command -v nscd &>/dev/null && service_is_active nscd; then
+        service_restart nscd 2>/dev/null
     fi
     
     # 9. Удаление директории скрипта DNSCrypt Manager, если скрипт запущен как самостоятельный

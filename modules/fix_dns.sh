@@ -37,7 +37,7 @@ fix_dns_issues() {
         safe_echo "${YELLOW}Порт 53 занят другим процессом. Попытка решения проблемы...${NC}"
         
         # Проверка systemd-resolved
-        if systemctl is-active --quiet systemd-resolved; then
+        if [ "$INIT_SYSTEM" = systemd ] && service_is_active systemd-resolved; then
             safe_echo "${YELLOW}Служба systemd-resolved активна и может блокировать порт 53.${NC}"
             echo "Варианты решения:"
             echo "1) Отключить systemd-resolved и перенастроить resolv.conf"
@@ -155,7 +155,7 @@ EOF
     
     # Проверка и перезапуск службы DNSCrypt
     safe_echo "\n${BLUE}Проверка и перезапуск службы DNSCrypt-proxy:${NC}"
-    systemctl is-active --quiet "$DNSCRYPT_SERVICE" || systemctl start "$DNSCRYPT_SERVICE"
+    service_is_active "$DNSCRYPT_SERVICE" || service_start "$DNSCRYPT_SERVICE"
     restart_service "$DNSCRYPT_SERVICE"
     
     # Проверка системного резолвера
@@ -287,7 +287,7 @@ main_menu() {
 check_root
 
 # Проверка зависимостей
-check_dependencies "dig" "lsof" "systemctl" "grep" "sed"
+check_dependencies "dig" "lsof" "grep" "sed"
 
 # Запуск основного меню
 log "INFO" "Запуск модуля исправления DNS..."

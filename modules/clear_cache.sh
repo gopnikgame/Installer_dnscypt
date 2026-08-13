@@ -36,7 +36,7 @@ clear_fs_cache() {
     
     # Останавливаем службу
     log "INFO" "Остановка DNSCrypt для очистки файлового кэша..."
-    systemctl stop $DNSCRYPT_SERVICE
+    service_stop "$DNSCRYPT_SERVICE"
     
     # Очистка кэша
     log "INFO" "Удаление файлов кэша из $DNSCRYPT_CACHE_DIR..."
@@ -48,9 +48,9 @@ clear_fs_cache() {
     
     # Запуск службы
     log "INFO" "Запуск DNSCrypt..."
-    if ! systemctl start $DNSCRYPT_SERVICE; then
+    if ! service_start "$DNSCRYPT_SERVICE"; then
         log "ERROR" "Ошибка при запуске службы DNSCrypt"
-        systemctl status $DNSCRYPT_SERVICE --no-pager
+        service_status "$DNSCRYPT_SERVICE"
         return 1
     fi
     
@@ -67,7 +67,7 @@ clear_cache_extended() {
     check_root
     
     # Проверка зависимостей
-    check_dependencies "systemctl" "rm" "chown" "chmod"
+    check_dependencies "rm" "chown" "chmod"
     
     # Проверка наличия DNSCrypt
     if ! check_dnscrypt_installed; then
@@ -146,7 +146,7 @@ clear_cache_extended() {
         fi
     else
         log "ERROR" "Служба DNSCrypt не запустилась после очистки кэша"
-        systemctl status $DNSCRYPT_SERVICE --no-pager
+        service_status "$DNSCRYPT_SERVICE"
         return 1
     fi
     

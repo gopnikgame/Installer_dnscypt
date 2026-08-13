@@ -1,7 +1,10 @@
 #!/bin/bash
 
 # Версия библиотеки
-LIB_VERSION="1.2.0"
+LIB_VERSION="1.3.0"
+
+COMMON_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${COMMON_LIB_DIR}/system.sh"
 
 # Функция проверки поддержки цветов терминалом
 supports_color() {
@@ -48,22 +51,7 @@ init_colors
 
 # Функция определения платформы
 detect_platform() {
-    if [ -f /etc/openwrt_release ]; then
-        echo "openwrt"
-        return 0
-    elif [ -f /etc/debian_version ]; then
-        echo "debian"
-        return 0
-    elif [ -f /etc/redhat-release ]; then
-        echo "redhat"
-        return 0
-    elif [ -f /etc/arch-release ]; then
-        echo "arch"
-        return 0
-    else
-        echo "unknown"
-        return 1
-    fi
+    detect_distribution_family
 }
 
 # Функция проверки, является ли система OpenWRT
@@ -88,7 +76,10 @@ DNSCRYPT_SERVICE="dnscrypt-proxy"
 # Определение пользователя DNSCrypt - ФУНКЦИЯ ПЕРЕНЕСЕНА СЮДА
 get_dnscrypt_user() {
     # Попытка определить пользователя из службы
-    local user=$(systemctl show -p User "$DNSCRYPT_SERVICE" 2>/dev/null | sed 's/User=//')
+    local user=""
+    if [ "$INIT_SYSTEM" = systemd ]; then
+        user=$(systemctl show -p User "$DNSCRYPT_SERVICE" 2>/dev/null | sed 's/User=//')
+    fi
     
     # Если не удалось определить через systemctl, пробуем стандартные варианты
     if [ -z "$user" ] || [ "$user" == "=" ]; then
@@ -316,7 +307,7 @@ restore_config() {
 check_service_status() {
     local service_name="$1"
     
-    if ! systemctl is-active --quiet "$service_name"; then
+    if ! service_is_active "$service_name"; then
         log "ERROR" "Служба ${service_name} не запущена"
         return 1
     fi
@@ -331,7 +322,7 @@ restart_service() {
     
     log "INFO" "Перезапуск службы ${service_name}"
     
-    if ! systemctl restart "$service_name"; then
+    if ! service_restart "$service_name"; then
         log "ERROR" "Ошибка перезапуска службы ${service_name}"
         return 1
     fi
@@ -494,11 +485,11 @@ verify_settings() {
     fi
     
     # Проверка статуса службы с попыткой запуска
-    if ! systemctl is-active --quiet dnscrypt-proxy; then
+    if ! service_is_active dnscrypt-proxy; then
         log "WARN" "Служба DNSCrypt не запущена, попытка запуска..."
-        if systemctl start dnscrypt-proxy 2>/dev/null; then
+        if service_start dnscrypt-proxy 2>/dev/null; then
             sleep 3  # Даем время на запуск
-            if ! systemctl is-active --quiet dnscrypt-proxy; then
+            if ! service_is_active dnscrypt-proxy; then
                 log "ERROR" "Не удалось запустить службу DNSCrypt"
                 return 1
             else
@@ -511,17 +502,17 @@ verify_settings() {
     fi
 
     # Проверка логов на наличие критических ошибок
-    local critical_errors=$(journalctl -u dnscrypt-proxy -n 50 --since "5 minutes ago" | grep -i -E "fatal|critical|panic" | wc -l)
+    local critical_errors=$(service_logs dnscrypt-proxy 50 2>/dev/null | grep -i -E "fatal|critical|panic" | wc -l)
     if [ "$critical_errors" -gt 0 ]; then
         log "ERROR" "В логах обнаружены критические ошибки:"
-        journalctl -u dnscrypt-proxy -n 10 --since "5 minutes ago" | grep -i -E "fatal|critical|panic"
+        service_logs dnscrypt-proxy 10 2>/dev/null | grep -i -E "fatal|critical|panic"
         return 1
     fi
     
     # Проверка предупреждений (не критично)
-    if journalctl -u dnscrypt-proxy -n 50 --since "5 minutes ago" | grep -i error > /dev/null; then
+    if service_logs dnscrypt-proxy 50 2>/dev/null | grep -i error > /dev/null; then
         log "WARN" "В логах обнаружены ошибки:"
-        journalctl -u dnscrypt-proxy -n 5 --since "5 minutes ago" | grep -i error | tail -3
+        service_logs dnscrypt-proxy 5 2>/dev/null | grep -i error | tail -3
     fi
 
     # Проверка резолвинга с таймаутом
@@ -592,7 +583,7 @@ extended_verify_config() {
         
         # Проверка активных DNS-серверов
         safe_echo "\n${YELLOW}==== DNSCrypt активные соединения ====${NC}"
-        journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Connected to|Server with lowest" | tail -10
+        service_logs dnscrypt-proxy 100 | grep -E "Connected to|Server with lowest" | tail -10
 
         safe_echo "\n${YELLOW}==== Текущий DNS сервер ====${NC}"
         dig +short resolver.dnscrypt.info TXT | tr -d '"'
@@ -613,7 +604,7 @@ extended_verify_config() {
         
         # Проверка используемого протокола
         safe_echo "\n${YELLOW}==== Информация о протоколе ====${NC}"
-        local protocol_info=$(journalctl -u dnscrypt-proxy -n 100 --no-pager | grep -E "Using protocol|Using transport" | tail -1)
+        local protocol_info=$(service_logs dnscrypt-proxy 100 | grep -E "Using protocol|Using transport" | tail -1)
         if [ -n "$protocol_info" ]; then
             safe_echo "${GREEN}$protocol_info${NC}"
         else
@@ -621,7 +612,7 @@ extended_verify_config() {
         fi
         
         # Проверка индикатора загрузки
-        local load_info=$(systemctl status dnscrypt-proxy | grep "Memory\|CPU")
+        local load_info=$(service_status dnscrypt-proxy | grep "Memory\|CPU")
         if [ -n "$load_info" ]; then
             safe_echo "\n${YELLOW}==== Ресурсы системы ====${NC}"
             echo "$load_info"
@@ -908,7 +899,7 @@ test_server_latency() {
         echo -n "Тестирование сервера $server... "
         
         # Получаем текущий IP сервера из логов dnscrypt-proxy
-        local server_ip=$(journalctl -u dnscrypt-proxy -n 200 | grep -i "$server" | grep -o -E "\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1 | tr -d '(' || echo "")
+        local server_ip=$(service_logs dnscrypt-proxy 200 | grep -i "$server" | grep -o -E "\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | head -1 | tr -d '(' || echo "")
         
         # Выполняем тестовые запросы
         local best_time=999999
@@ -1061,26 +1052,26 @@ clear_dns_cache() {
     log "INFO" "Очистка DNS кэша..."
     
     # Очистка кэша systemd-resolved (если используется)
-    if systemctl is-active --quiet systemd-resolved; then
+    if [ "$INIT_SYSTEM" = systemd ] && service_is_active systemd-resolved; then
         systemd-resolve --flush-caches
         log "SUCCESS" "Кэш systemd-resolved очищен"
     fi
     
     # Очистка кэша DNSCrypt (требуется перезапуск)
-    if systemctl is-active --quiet dnscrypt-proxy; then
-        systemctl restart dnscrypt-proxy
+    if service_is_active dnscrypt-proxy; then
+        service_restart dnscrypt-proxy
         log "SUCCESS" "Служба DNSCrypt перезапущена для очистки кэша"
     fi
     
     # Очистка кэша nscd (если установлен)
-    if command -v nscd &>/dev/null && systemctl is-active --quiet nscd; then
-        systemctl restart nscd
+    if command -v nscd &>/dev/null && service_is_active nscd; then
+        service_restart nscd
         log "SUCCESS" "Кэш nscd очищен"
     fi
     
     # Очистка локального кэша dnsmasq (если установлен)
-    if command -v dnsmasq &>/dev/null && systemctl is-active --quiet dnsmasq; then
-        systemctl restart dnsmasq
+    if command -v dnsmasq &>/dev/null && service_is_active dnsmasq; then
+        service_restart dnsmasq
         log "SUCCESS" "Кэш dnsmasq очищен"
     fi
     

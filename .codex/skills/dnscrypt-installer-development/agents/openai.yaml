@@ -1,0 +1,4 @@
+interface:
+  display_name: "DNSCrypt Installer Development"
+  short_description: "Portable DNSCrypt installer development"
+  default_prompt: "Use $dnscrypt-installer-development to inspect and improve this DNSCrypt installer safely."

@@ -17,22 +17,30 @@ source "${SCRIPT_DIR}/lib/diagnostic.sh" 2>/dev/null || {
 
 # Проверка платформы и вызов соответствующей установки
 main_install() {
-    local platform=$(detect_platform)
+    local platform init_system distribution
+    platform=$(detect_platform)
+    distribution=$(detect_distribution 2>/dev/null || echo unknown)
+    init_system=$(detect_init_system 2>/dev/null || echo unknown)
+    INIT_SYSTEM="$init_system"
     
-    log "INFO" "Обнаружена платформа: $platform"
+    log "INFO" "Обнаружена система: distribution=$distribution family=$platform init=$init_system"
     
     case "$platform" in
         openwrt)
             log "INFO" "Запуск установки для OpenWRT"
             if [ -f "${SCRIPT_DIR}/modules/install_openwrt.sh" ]; then
-                exec bash "${SCRIPT_DIR}/modules/install_openwrt.sh"
+                exec sh "${SCRIPT_DIR}/modules/install_openwrt.sh"
             else
                 log "ERROR" "Модуль установки OpenWRT не найден"
                 return 1
             fi
             ;;
-        debian|redhat|arch|unknown)
-            log "INFO" "Запуск стандартной установки для Linux (systemd)"
+        debian|redhat|arch)
+            case "$init_system" in
+                systemd|sysvinit|openrc|runit) ;;
+                *) log "ERROR" "Неподдерживаемая система инициализации: $init_system"; return 1 ;;
+            esac
+            log "INFO" "Запуск установки для Linux ($init_system)"
             install_dnscrypt_linux
             ;;
         *)
@@ -154,10 +162,18 @@ install_dnscrypt_linux() {
     
     # Запуск службы (ИСПРАВЛЕННАЯ СЕКЦИЯ)
     log "INFO" "Запуск службы DNSCrypt"
-    systemctl enable dnscrypt-proxy || log "WARN" "Не удалось включить автозапуск службы"
+    service_enable dnscrypt-proxy || log "WARN" "Не удалось включить автозапуск службы"
+    if ! service_start dnscrypt-proxy; then
+        log "ERROR" "Не удалось запустить DNSCrypt через $INIT_SYSTEM"
+        service_status dnscrypt-proxy 2>/dev/null || true
+        service_logs dnscrypt-proxy 30 2>/dev/null || true
+        log "ERROR" "Fallback на порт 5353 запрещён: resolv.conf не поддерживает нестандартный DNS-порт."
+        rollback_changes
+        return 1
+    fi
     
     # Первая попытка запуска
-    if ! systemctl start dnscrypt-proxy; then
+    if false; then # legacy recovery kept unreachable until it is removed in a dedicated cleanup
         log "WARN" "Первая попытка запуска службы не удалась, проверяем причину..."
         
         # Проверяем логи для диагностики
@@ -325,7 +341,7 @@ EOF
     safe_echo "Для управления и дополнительной настройки используйте DNSCrypt Manager\n"
 
     # Проверка наличия потенциальных проблем
-    if systemctl is-active --quiet systemd-resolved; then
+    if [ "$INIT_SYSTEM" = systemd ] && service_is_active systemd-resolved; then
         safe_echo "${YELLOW}ВНИМАНИЕ:${NC} systemd-resolved всё еще активен, что может вызвать конфликты"
         safe_echo "Рекомендуется выполнить: ${CYAN}sudo systemctl disable --now systemd-resolved${NC}\n"
     fi
@@ -418,10 +434,7 @@ rollback_changes() {
                 
             "remove_service")
                 log "INFO" "Удаление службы DNSCrypt"
-                systemctl disable dnscrypt-proxy 2>/dev/null
-                systemctl stop dnscrypt-proxy 2>/dev/null
-                rm -f /etc/systemd/system/dnscrypt-proxy.service
-                systemctl daemon-reload
+                remove_dnscrypt_service dnscrypt-proxy
                 log "SUCCESS" "Служба DNSCrypt удалена"
                 ;;
                 
@@ -442,8 +455,8 @@ rollback_changes() {
                 if [ -f "${TEMP_BACKUP_DIR}/stopped_services.txt" ]; then
                     while read -r service; do
                         log "INFO" "Перезапуск сервиса $service"
-                        systemctl enable "$service"
-                        systemctl start "$service"
+                        service_enable "$service"
+                        service_start "$service"
                     done < "${TEMP_BACKUP_DIR}/stopped_services.txt"
                 fi
                 ;;
@@ -683,58 +696,17 @@ create_user() {
     return 0
 }
 
-# Создание службы systemd
+# Создание службы для обнаруженной init-системы
 create_service() {
-    log "INFO" "Создание службы systemd для DNSCrypt-proxy"
-    
-    # Создаем файл службы с правильными capabilities
-    cat > "$SERVICE_FILE" << EOF
-[Unit]
-Description=DNSCrypt client proxy
-Documentation=https://github.com/DNSCrypt/dnscrypt-proxy/wiki
-After=network.target
-Before=nss-lookup.target
-Wants=network-online.target
-
-[Service]
-ExecStart=$INSTALL_DIR/dnscrypt-proxy -config $CONFIG_FILE
-Type=simple
-User=$DNSCRYPT_USER
-Group=$DNSCRYPT_GROUP
-Restart=on-failure
-RestartSec=10
-
-# Capabilities для привязки к порту 53
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID CAP_DAC_OVERRIDE
-NoNewPrivileges=false
-
-# Безопасность
-MemoryDenyWriteExecute=true
-ProtectControlGroups=true
-ProtectHome=true
-ProtectKernelModules=true
-ProtectKernelTunables=true
-ProtectSystem=strict
-ReadWritePaths=$CONFIG_DIR
-RestrictAddressFamilies=AF_INET AF_INET6
-RestrictNamespaces=true
-RestrictRealtime=true
-SystemCallArchitectures=native
-SystemCallFilter=~@clock @cpu-emulation @debug @keyring @module @mount @obsolete @resources
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    # Перезагружаем конфигурацию systemd
-    systemctl daemon-reload
+    log "INFO" "Создание службы DNSCrypt-proxy для $INIT_SYSTEM"
+    install_dnscrypt_service "$INSTALL_DIR/dnscrypt-proxy" "$CONFIG_FILE" \
+        "$DNSCRYPT_USER" "$DNSCRYPT_GROUP" "$SERVICE_NAME" || return 1
     
     # Добавляем действие отката
     ROLLBACK_NEEDED=true
     ROLLBACK_ACTIONS+=("remove_service")
     
-    log "SUCCESS" "Служба systemd для DNSCrypt-proxy создана"
+    log "SUCCESS" "Служба $INIT_SYSTEM для DNSCrypt-proxy создана"
     return 0
 }
 
@@ -952,6 +924,10 @@ EOF
 # Настройка systemd-resolved
 configure_resolved() {
     log "INFO" "Проверка и настройка systemd-resolved"
+    if [ "$INIT_SYSTEM" != systemd ]; then
+        log "INFO" "systemd-resolved неприменим для $INIT_SYSTEM; пропускаем"
+        return 0
+    fi
     
     # Проверка наличия systemd-resolved
     if ! systemctl list-unit-files | grep -q systemd-resolved; then
@@ -1120,13 +1096,8 @@ EOF
                 ROLLBACK_ACTIONS+=("restart_other_dns")
                 
                 log "INFO" "Остановка named/bind..."
-                systemctl stop named bind9 2>/dev/null || {
-                    log "WARN" "Не удалось остановить named/bind через systemctl"
-                    if command -v service &>/dev/null; then
-                        service named stop 2>/dev/null || service bind9 stop 2>/dev/null
-                    fi
-                }
-                systemctl disable named bind9 2>/dev/null || true
+                service_stop named 2>/dev/null || service_stop bind9 2>/dev/null || true
+                service_disable named 2>/dev/null || service_disable bind9 2>/dev/null || true
                 log "INFO" "named/bind остановлен и отключен"
                 ;;
             dnsmasq)
@@ -1135,13 +1106,8 @@ EOF
                 ROLLBACK_ACTIONS+=("restart_other_dns")
                 
                 log "INFO" "Остановка dnsmasq..."
-                systemctl stop dnsmasq || {
-                    log "WARN" "Не удалось остановить dnsmasq через systemctl"
-                    if command -v service &>/dev/null; then
-                        service dnsmasq stop 2>/dev/null
-                    fi
-                }
-                systemctl disable dnsmasq || true
+                service_stop dnsmasq || true
+                service_disable dnsmasq || true
                 log "INFO" "dnsmasq остановлен и отключен"
                 ;;
             unbound)
@@ -1150,13 +1116,8 @@ EOF
                 ROLLBACK_ACTIONS+=("restart_other_dns")
                 
                 log "INFO" "Остановка unbound..."
-                systemctl stop unbound || {
-                    log "WARN" "Не удалось остановить unbound через systemctl"
-                    if command -v service &>/dev/null; then
-                        service unbound stop 2>/dev/null
-                    fi
-                }
-                systemctl disable unbound || true
+                service_stop unbound || true
+                service_disable unbound || true
                 log "INFO" "unbound остановлен и отключен"
                 ;;
             *)

@@ -52,18 +52,18 @@ diagnose_dns_issues() {
     fi
     
     safe_echo "\n${BLUE}Проверка состояния службы DNSCrypt-proxy:${NC}"
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if service_is_active "$DNSCRYPT_SERVICE"; then
         safe_echo "${GREEN}Служба активна${NC}"
-        systemctl status "$DNSCRYPT_SERVICE" --no-pager --lines=5
+        service_status "$DNSCRYPT_SERVICE"
     else
         safe_echo "${RED}Служба неактивна${NC}"
         safe_echo "${YELLOW}Попытка запуска службы...${NC}"
-        if systemctl start "$DNSCRYPT_SERVICE"; then
+        if service_start "$DNSCRYPT_SERVICE"; then
             safe_echo "${GREEN}Служба успешно запущена${NC}"
         else
             safe_echo "${RED}Не удалось запустить службу${NC}"
             safe_echo "\n${BLUE}Статус службы:${NC}"
-            systemctl status "$DNSCRYPT_SERVICE" --no-pager --lines=10
+            service_status "$DNSCRYPT_SERVICE"
         fi
     fi
     
@@ -77,11 +77,11 @@ diagnose_dns_issues() {
     grep "listen_addresses" "$DNSCRYPT_CONFIG" | sed 's/listen_addresses = //'
     
     safe_echo "\n${BLUE}Последние записи журнала службы:${NC}"
-    journalctl -u "$DNSCRYPT_SERVICE" -n 20 --no-pager
+    service_logs "$DNSCRYPT_SERVICE" 20
     
     safe_echo "\n${BLUE}Тестирование DNS-запросов:${NC}"
     # Проверяем, работает ли служба перед тестированием
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if service_is_active "$DNSCRYPT_SERVICE"; then
         echo "Тестирование резолвинга через DNSCrypt..."
         if timeout 10 dig @127.0.0.1 example.com +short > /dev/null 2>&1; then
             safe_echo "${GREEN}DNS резолвинг работает${NC}"
@@ -156,7 +156,7 @@ check_system_resolver() {
     cat "$RESOLV_CONF"
     
     # Проверка статуса systemd-resolved
-    if systemctl is-active --quiet systemd-resolved; then
+    if [ "$INIT_SYSTEM" = systemd ] && service_is_active systemd-resolved; then
         echo "systemd-resolved активен"
         
         # Проверка наличия команды systemd-resolve
@@ -187,15 +187,15 @@ check_dnscrypt_status() {
     fi
     
     safe_echo "\n${BLUE}Статус службы:${NC}"
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if service_is_active "$DNSCRYPT_SERVICE"; then
         safe_echo "${GREEN}Активна${NC}"
     else
         safe_echo "${RED}Неактивна${NC}"
         # Попытка запуска
         safe_echo "${YELLOW}Попытка запуска службы...${NC}"
-        if systemctl start "$DNSCRYPT_SERVICE" 2>/dev/null; then
+        if service_start "$DNSCRYPT_SERVICE" 2>/dev/null; then
             sleep 2
-            if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+            if service_is_active "$DNSCRYPT_SERVICE"; then
                 safe_echo "${GREEN}Служба успешно запущена${NC}"
             else
                 safe_echo "${RED}Служба не запустилась${NC}"
@@ -206,7 +206,7 @@ check_dnscrypt_status() {
     fi
     
     safe_echo "\n${BLUE}Автозапуск службы:${NC}"
-    systemctl is-enabled --quiet "$DNSCRYPT_SERVICE" && safe_echo "${GREEN}Включен${NC}" || safe_echo "${RED}Отключен${NC}"
+    service_is_active "$DNSCRYPT_SERVICE" && safe_echo "${GREEN}Запущен${NC}" || safe_echo "${RED}Остановлен${NC}"
     
     safe_echo "\n${BLUE}Занятые порты:${NC}"
     if lsof -i :53 2>/dev/null | grep LISTEN; then
@@ -275,7 +275,7 @@ check_dns_security() {
     log "INFO" "Проверка безопасности DNS..."
     
     safe_echo "\n${BLUE}Проверка поддержки DNSSEC:${NC}"
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if service_is_active "$DNSCRYPT_SERVICE"; then
         timeout 10 dig @127.0.0.1 +dnssec dnssec-tools.org | grep -E "flags:|RRSIG"
     else
         safe_echo "${RED}Служба DNSCrypt не запущена${NC}"
@@ -359,7 +359,7 @@ check_dns_leak() {
         fi
         
         # Проверка через DNSCrypt, если активен
-        if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+        if service_is_active "$DNSCRYPT_SERVICE"; then
             local dnscrypt_ip=$(timeout 10 dig +short myip.opendns.com @127.0.0.1 2>/dev/null)
             if [ -n "$dnscrypt_ip" ]; then
                 echo "   DNSCrypt определяет ваш IP как: $dnscrypt_ip"
@@ -389,7 +389,7 @@ check_dns_leak() {
     
     # Проверка текущих DNS запросов
     safe_echo "\n${BLUE}● Тестирование DNS запросов:${NC}"
-    if systemctl is-active --quiet "$DNSCRYPT_SERVICE"; then
+    if service_is_active "$DNSCRYPT_SERVICE"; then
         local test_domain="example.com"
         local dnscrypt_result=$(timeout 5 dig @127.0.0.1 "$test_domain" +short 2>/dev/null)
         local system_result=$(timeout 5 dig "$test_domain" +short 2>/dev/null)
