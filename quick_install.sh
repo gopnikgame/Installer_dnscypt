@@ -1,25 +1,46 @@
 #!/bin/sh
 # Compatible with bash and ash (BusyBox)
 
-# Version: 1.2.1
+# Version: 1.3.0
 # Author: gopnikgame
 # Created: 2025-06-22
 # Last Modified: 2025-12-12
 
+# Определяем свежий main один раз, чтобы вся установка использовала один commit.
+REPOSITORY_API="${DNSCRYPT_REPOSITORY_API:-https://api.github.com/repos/gopnikgame/Installer_dnscypt/commits/main}"
+REPOSITORY_RAW_BASE="${DNSCRYPT_REPOSITORY_RAW_BASE:-https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt}"
+if ! command -v wget >/dev/null 2>&1; then
+    printf '%s\n' "wget не найден; установка остановлена" >&2
+    exit 1
+fi
+if ! command -v bash >/dev/null 2>&1; then
+    printf '%s\n' "bash не найден; DNSCrypt Manager не может быть установлен" >&2
+    exit 1
+fi
+commit_response=$(wget -q --tries=5 --timeout=30 -O - "$REPOSITORY_API") || {
+    printf '%s\n' "Не удалось определить свежий commit main" >&2
+    exit 1
+}
+INSTALL_COMMIT=$(printf '%s\n' "$commit_response" | sed -n 's/^[[:space:]]*"sha":[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' | sed -n '1p')
+case "$INSTALL_COMMIT" in
+    *[!0-9a-f]*|'') printf '%s\n' "GitHub API вернул некорректный commit" >&2; exit 1 ;;
+esac
+[ "${#INSTALL_COMMIT}" -eq 40 ] || { printf '%s\n' "GitHub API вернул некорректный commit" >&2; exit 1; }
+DOWNLOAD_BASE="${REPOSITORY_RAW_BASE}/${INSTALL_COMMIT}"
+
 # Подгрузка общих функций
 SCRIPT_DIR="/usr/local/dnscrypt-scripts"
-source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
+. "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
     # Если библиотека не найдена, создаем временную директорию и загружаем
     mkdir -p "${SCRIPT_DIR}/lib"
-    wget -q -O "${SCRIPT_DIR}/lib/system.sh" "https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/system.sh"
-    wget -q -O "${SCRIPT_DIR}/lib/common.sh" "https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/common.sh"
-    source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
+    wget -q --tries=5 --timeout=30 -O "${SCRIPT_DIR}/lib/system.sh" "${DOWNLOAD_BASE}/lib/system.sh"
+    wget -q --tries=5 --timeout=30 -O "${SCRIPT_DIR}/lib/common.sh" "${DOWNLOAD_BASE}/lib/common.sh"
+    . "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || {
         # Если не удалось загрузить, создаем минимальные необходимые функции
         RED='\033[0;31m'
         GREEN='\033[0;32m'
         YELLOW='\033[1;33m'
         BLUE='\033[0;34m'
-        CYAN='\033[0;36m'
         NC='\033[0m'
         
         print_header() {
@@ -64,8 +85,8 @@ source "${SCRIPT_DIR}/lib/common.sh" 2>/dev/null || . "${SCRIPT_DIR}/lib/common.
 }
 
 # Константы
-INSTALL_VERSION="1.2.1"
-MAIN_SCRIPT_URL="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/main.sh"
+INSTALL_VERSION="1.3.0"
+MAIN_SCRIPT_URL="${DOWNLOAD_BASE}/main.sh"
 SCRIPT_DIR="/usr/local/dnscrypt-scripts"
 MODULES_DIR="${SCRIPT_DIR}/modules"
 LIB_DIR="${SCRIPT_DIR}/lib"
@@ -92,28 +113,23 @@ print_step() {
 download_libraries() {
     print_step "Загрузка библиотек..."
     
-    local libraries="system.sh common.sh anonymized_dns.sh diagnostic.sh"
-    local success=true
+    libraries="system.sh common.sh anonymized_dns.sh diagnostic.sh"
+    success=true
     
     for lib in $libraries; do
-        local lib_url="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/lib/${lib}"
-        local lib_path="${LIB_DIR}/${lib}"
+        lib_url="${DOWNLOAD_BASE}/lib/${lib}"
+        lib_path="${LIB_DIR}/${lib}"
+        candidate="${lib_path}.tmp"
         
         printf "Загрузка %s... " "$lib"
-        if wget -q --tries=3 --timeout=10 -O "$lib_path" "$lib_url"; then
+        if wget -q --tries=5 --timeout=30 -O "$candidate" "$lib_url" && \
+            [ -s "$candidate" ] && bash -n "$candidate"; then
+            mv -f "$candidate" "$lib_path"
             printf "${GREEN}Успешно${NC}\n"
-            # Проверка, что библиотека не пуста
-            if [ ! -s "$lib_path" ]; then
-                printf "${YELLOW}Файл пуст, создаем заглушку${NC}\n"
-                printf "#!/bin/sh\n# %s - Пустая библиотека\n" "$lib" > "$lib_path"
-            fi
         else
             printf "${RED}Ошибка${NC}\n"
             log "ERROR" "Ошибка при загрузке библиотеки ${lib}"
-            
-            # Создаем заглушку для библиотеки
-            printf "#!/bin/sh\n# %s - Пустая библиотека, создана автоматически\n" "$lib" > "$lib_path"
-            
+            rm -f "$candidate"
             success=false
         fi
     done
@@ -122,44 +138,9 @@ download_libraries() {
         log "SUCCESS" "Все библиотеки успешно загружены"
         return 0
     else
-        log "WARN" "Некоторые библиотеки могли быть не загружены, созданы заглушки"
-        return 0
-    fi
-}
-
-# Создание символических ссылок на библиотеки
-create_symlinks() {
-    print_step "Создание символических ссылок..."
-    
-    # Создаем директорию lib в /usr/local/bin, если она не существует
-    mkdir -p /usr/local/bin/lib
-    
-    # Создаем символические ссылки для всех библиотек
-    for lib_file in "${LIB_DIR}"/*.sh; do
-        [ -f "$lib_file" ] || continue
-        local lib_name=$(basename "$lib_file")
-        ln -sf "$lib_file" "/usr/local/bin/lib/$lib_name"
-    done
-    
-    log "SUCCESS" "Символические ссылки успешно созданы"
-    return 0
-}
-
-# Патчинг пути к библиотекам в основном скрипте
-patch_main_script() {
-    print_step "Корректировка путей в основном скрипте..."
-    
-    # Проверяем, что файл существует
-    if [ ! -f "${SCRIPT_DIR}/main.sh" ]; then
-        log "ERROR" "Основной скрипт не найден"
+        log "ERROR" "Не все библиотеки загружены; установка остановлена"
         return 1
     fi
-    
-    # Добавляем строку для загрузки общей библиотеки с абсолютными путями
-    sed -i '5i# Добавляем абсолютный путь к библиотекам\nif [ ! -f "${SCRIPT_DIR}/lib/common.sh" ]; then\n  SCRIPT_DIR="/usr/local/dnscrypt-scripts"\nfi' "${SCRIPT_DIR}/main.sh" 2>/dev/null || true
-    
-    log "SUCCESS" "Пути в основном скрипте скорректированы"
-    return 0
 }
 
 # Загрузка главного скрипта
@@ -167,11 +148,11 @@ download_main_script() {
     print_header "УСТАНОВКА DNSCRYPT MANAGER"
     print_step "Загрузка основного скрипта..."
     
-    if wget -q --tries=3 --timeout=15 -O "${SCRIPT_DIR}/main.sh" "$MAIN_SCRIPT_URL"; then
-        chmod +x "${SCRIPT_DIR}/main.sh"
-        
-        # Патчим пути в основном скрипте
-        patch_main_script
+    candidate="${SCRIPT_DIR}/main.sh.tmp"
+    if wget -q --tries=5 --timeout=30 -O "$candidate" "$MAIN_SCRIPT_URL" && \
+        [ -s "$candidate" ] && bash -n "$candidate"; then
+        chmod +x "$candidate"
+        mv -f "$candidate" "${SCRIPT_DIR}/main.sh"
         
         # Создание символической ссылки
         ln -sf "${SCRIPT_DIR}/main.sh" "/usr/local/bin/dnscrypt_manager"
@@ -180,6 +161,7 @@ download_main_script() {
         
         return 0
     else
+        rm -f "$candidate"
         log "ERROR" "Ошибка при загрузке основного скрипта"
         return 1
     fi
@@ -194,7 +176,7 @@ show_completion() {
     printf "\n"
     
     # Определяем платформу для корректного вывода команд
-    local platform=$(detect_platform 2>/dev/null || echo "unknown")
+    platform=$(detect_platform 2>/dev/null || echo "unknown")
     
     if [ "$platform" = "openwrt" ]; then
         printf "Для запуска используйте:\n"
@@ -222,7 +204,7 @@ main() {
     check_root
     
     # Определяем платформу для проверки зависимостей
-    local platform=$(detect_platform 2>/dev/null || echo "unknown")
+    platform=$(detect_platform 2>/dev/null || echo "unknown")
     
     # Проверяем зависимости в зависимости от платформы
     if [ "$platform" = "openwrt" ]; then
@@ -240,11 +222,9 @@ main() {
     # Загрузка библиотек перед скриптом
     if download_libraries; then
         log "SUCCESS" "Библиотеки успешно загружены"
-        
-        # Создание символических ссылок для библиотек
-        create_symlinks
     else
-        log "WARN" "Некоторые библиотеки могут быть не загружены"
+        log "ERROR" "Библиотеки не прошли загрузку и проверку"
+        exit 1
     fi
     
     if download_main_script; then

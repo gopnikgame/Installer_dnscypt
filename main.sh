@@ -1,7 +1,13 @@
 #!/bin/bash
 
-# Подгрузка общих функций
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Подгрузка общих функций. readlink -f сохраняет правильный каталог при
+# запуске через /usr/local/bin/dnscrypt_manager.
+resolve_script_dir() {
+    local source_path
+    source_path=$(readlink -f "$1") || return 1
+    cd "$(dirname "$source_path")" && pwd
+}
+SCRIPT_DIR="$(resolve_script_dir "${BASH_SOURCE[0]}")"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 # Импорт дополнительных библиотек
@@ -14,7 +20,10 @@ SCRIPT_VERSION="2.1.0"
 # Константы
 MODULES_DIR="${SCRIPT_DIR}/modules"
 CONFIG_DIR="/etc/dnscrypt-manager"
-GITHUB_REPO="https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main"
+GITHUB_API_URL="${DNSCRYPT_GITHUB_API_URL:-https://api.github.com/repos/gopnikgame/Installer_dnscypt/commits/main}"
+GITHUB_RAW_BASE="${DNSCRYPT_GITHUB_RAW_BASE:-https://raw.githubusercontent.com/gopnikgame/Installer_dnscypt}"
+GITHUB_REPO=""
+UPDATE_COMMIT=""
 
 # Порядок и описание модулей
 declare -a MODULE_ORDER=(
@@ -55,6 +64,20 @@ declare -A MODULE_DESCRIPTIONS=(
 
 # Основные функции
 
+resolve_update_snapshot() {
+    local response commit
+    response=$(curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --connect-timeout 15 --max-time 90 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        "$GITHUB_API_URL") || return 1
+    commit=$(sed -n 's/^[[:space:]]*"sha":[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' <<< "$response" | sed -n '1p')
+    [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    UPDATE_COMMIT="$commit"
+    GITHUB_REPO="${GITHUB_RAW_BASE}/${commit}"
+    log "INFO" "Выбран свежий snapshot main: ${UPDATE_COMMIT}"
+}
+
 # Загрузка и обновление модулей
 update_modules() {
     print_header "ОБНОВЛЕНИЕ МОДУЛЕЙ"
@@ -71,8 +94,9 @@ update_modules() {
         if [[ "$force_update" == "true" ]] || [[ ! -f "$module_file" ]]; then
             log "INFO" "Загрузка модуля: ${module}"
             
-            if ! wget -q --tries=3 --timeout=10 -O "${module_file}.tmp" "$github_url"; then
+            if ! wget -q --tries=5 --timeout=30 -O "${module_file}.tmp" "$github_url"; then
                 log "ERROR" "Ошибка загрузки модуля ${module}"
+                rm -f "${module_file}.tmp"
                 ((errors++))
                 continue
             fi
@@ -80,6 +104,13 @@ update_modules() {
             # Проверяем, что файл не пустой
             if [[ ! -s "${module_file}.tmp" ]]; then
                 log "ERROR" "Пустой файл модуля ${module}"
+                rm -f "${module_file}.tmp"
+                ((errors++))
+                continue
+            fi
+
+            if ! bash -n "${module_file}.tmp"; then
+                log "ERROR" "Модуль ${module} не прошёл bash -n"
                 rm -f "${module_file}.tmp"
                 ((errors++))
                 continue
@@ -134,8 +165,9 @@ update_libraries() {
         if [[ "$force_update" == "true" ]] || [[ ! -f "$lib_file" ]]; then
             log "INFO" "Загрузка библиотеки: ${lib}"
             
-            if ! wget -q --tries=3 --timeout=10 -O "${lib_file}.tmp" "$github_url"; then
+            if ! wget -q --tries=5 --timeout=30 -O "${lib_file}.tmp" "$github_url"; then
                 log "ERROR" "Ошибка загрузки библиотеки ${lib}"
+                rm -f "${lib_file}.tmp"
                 ((errors_libs++))
                 
                 # common.sh критически важна
@@ -145,17 +177,20 @@ update_libraries() {
                 continue
             fi
             
-            # Проверяем, что файл не пустой
+            # Проверяем, что файл не пустой и синтаксически корректный.
             if [[ ! -s "${lib_file}.tmp" ]]; then
                 log "WARN" "Пустая библиотека ${lib}"
-                # Создаем заглушку для библиотеки
-                echo "#!/bin/bash" > "${lib_file}.tmp"
-                echo "# ${lib} - Пустая библиотека, будет обновлена позже" >> "${lib_file}.tmp"
-                
-                # common.sh критически важна
-                if [[ "$lib" == "common.sh" ]]; then
-                    critical_error=true
-                fi
+                rm -f "${lib_file}.tmp"
+                ((errors_libs++))
+                [[ "$lib" == "common.sh" ]] && critical_error=true
+                continue
+            fi
+            if ! bash -n "${lib_file}.tmp"; then
+                log "ERROR" "Библиотека ${lib} не прошла bash -n"
+                rm -f "${lib_file}.tmp"
+                ((errors_libs++))
+                [[ "$lib" == "common.sh" ]] && critical_error=true
+                continue
             fi
             
             mv "${lib_file}.tmp" "$lib_file"
@@ -280,7 +315,11 @@ show_menu() {
                 fi
                 ;;
             $((i-2)))
-                update_modules true
+                if resolve_update_snapshot; then
+                    update_modules true
+                else
+                    log "ERROR" "Не удалось определить свежий snapshot main"
+                fi
                 ;;
             *)
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#MODULE_ORDER[@]} ]]; then
@@ -306,7 +345,8 @@ check_system() {
     # Проверка совместимости между модулями и библиотеками
     if [[ -f "${SCRIPT_DIR}/lib/common.sh" ]]; then
         # Проверка версии библиотеки common.sh
-        local lib_version=$(grep "LIB_VERSION=" "${SCRIPT_DIR}/lib/common.sh" | cut -d'"' -f2)
+        local lib_version
+        lib_version=$(grep "LIB_VERSION=" "${SCRIPT_DIR}/lib/common.sh" | cut -d'"' -f2)
         if [[ -n "$lib_version" && "$lib_version" < "1.0.0" ]]; then
             log "WARN" "Библиотека common.sh устарела (версия $lib_version). Рекомендуется обновление."
         fi
@@ -320,8 +360,12 @@ check_system() {
 main() {
     check_system
     
-    # Первоначальное обновление модулей
-    if ! update_modules; then
+    # При каждом запуске обновляем все файлы из одного свежего snapshot main.
+    if ! resolve_update_snapshot; then
+        log "ERROR" "Не удалось определить свежий snapshot main"
+        return 1
+    fi
+    if ! update_modules true; then
         log "WARN" "Не все модули были загружены корректно"
     fi
     
@@ -329,4 +373,6 @@ main() {
 }
 
 # Запуск
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
