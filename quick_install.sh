@@ -1,5 +1,5 @@
-#!/bin/sh
-# Compatible with bash and ash (BusyBox)
+#!/usr/bin/env bash
+# Для OpenWrt используйте отдельный modules/install_openwrt.sh.
 
 # Version: 1.3.0
 # Author: gopnikgame

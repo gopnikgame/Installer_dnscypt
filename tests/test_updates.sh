@@ -26,6 +26,7 @@ grep -q 'update_modules true' "$ROOT/main.sh"
 grep -q 'bash -n "${module_file}.tmp"' "$ROOT/main.sh"
 grep -q 'bash -n "${lib_file}.tmp"' "$ROOT/main.sh"
 grep -q 'DOWNLOAD_BASE="${REPOSITORY_RAW_BASE}/${INSTALL_COMMIT}"' "$ROOT/quick_install.sh"
+grep -q '^#!/usr/bin/env bash$' "$ROOT/quick_install.sh"
 if grep -q 'raw.githubusercontent.com/gopnikgame/Installer_dnscypt/main/' "$ROOT/quick_install.sh"; then
     printf 'quick installer still mixes files from floating main\n' >&2
     exit 1
